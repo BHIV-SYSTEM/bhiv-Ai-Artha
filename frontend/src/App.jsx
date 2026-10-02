@@ -7,7 +7,6 @@ import Layout from './components/layout/Layout';
 import AuthLayout from './components/layout/AuthLayout';
 
 import Login from './pages/auth/Login';
-import Signup from './pages/auth/Signup';
 
 import FinancialIntelligenceDashboard from './pages/dashboard/FinancialIntelligenceDashboard';
 import TallyConnect from './pages/tally/TallyConnect';
@@ -41,10 +40,8 @@ import StatementDetail from './pages/statements/StatementDetail';
 
 import DataIngestion from './pages/ingestion/DataIngestion';
 
-const NiyantranLocation = lazy(() => import('./pages/niyantran/NiyantranLocation'));
 import DealerList from './pages/dealers/DealerList';
 import DealerDetail from './pages/dealers/DealerDetail';
-const StorefrontOCR = lazy(() => import('./pages/dealers/StorefrontOCR'));
 const StoreAccountStatement = lazy(() => import('./pages/dealers/StoreAccountStatement'));
 import SalesAgentList from './pages/agents/SalesAgentList';
 import SalesAgentDetail from './pages/agents/SalesAgentDetail';
@@ -101,7 +98,11 @@ const RoleProtectedRoute = ({ children, allowedRoles }) => {
     );
   }
 
-  const userRoles = user.roles || (user.role ? [user.role] : []);
+  const rawRoles = user.roles || (user.role ? [user.role] : []);
+  // Sub-admin (client company admin) gets admin + accountant page access.
+  const userRoles = rawRoles.includes('sub_admin')
+    ? [...new Set([...rawRoles, 'admin', 'accountant'])]
+    : rawRoles;
   const hasAccess = allowedRoles.some(r => userRoles.includes(r));
 
   if (!hasAccess) {
@@ -154,7 +155,6 @@ function App() {
       <Routes>
         <Route element={<AuthLayout />}>
           <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
-          <Route path="/signup" element={<PublicRoute><Signup /></PublicRoute>} />
         </Route>
 
         <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
@@ -191,12 +191,10 @@ function App() {
 
           <Route path="/ingestion" element={<RoleProtectedRoute allowedRoles={['admin', 'accountant']}><DataIngestion /></RoleProtectedRoute>} />
 
-          <Route path="/niyantran" element={<LazyLoad><NiyantranLocation /></LazyLoad>} />
           <Route path="/dealers" element={<DealerList />} />
           <Route path="/dealers/new" element={<RoleProtectedRoute allowedRoles={['admin', 'accountant']}><DealerList /></RoleProtectedRoute>} />
           <Route path="/dealers/:id" element={<DealerDetail />} />
           <Route path="/dealers/:id/edit" element={<RoleProtectedRoute allowedRoles={['admin', 'accountant']}><DealerDetail /></RoleProtectedRoute>} />
-          <Route path="/dealers/storefront-ocr" element={<LazyLoad><StorefrontOCR /></LazyLoad>} />
           <Route path="/dealers/:id/statement" element={<LazyLoad><StoreAccountStatement /></LazyLoad>} />
           <Route path="/agents" element={<SalesAgentList />} />
           <Route path="/agents/new" element={<RoleProtectedRoute allowedRoles={['admin']}><SalesAgentList /></RoleProtectedRoute>} />

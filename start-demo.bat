@@ -53,7 +53,6 @@ echo   - Dashboard:       http://localhost:5173/
 echo   - Dealers:         http://localhost:5173/dealers
 echo   - Dealer Detail:   http://localhost:5173/dealers/[id]
 echo   - Sales Agents:    http://localhost:5173/agents
-echo   - Niyantran:       http://localhost:5173/niyantran
 echo   - Vouchers:        http://localhost:5173/vouchers
 echo   - Reports:         http://localhost:5173/reports
 echo.

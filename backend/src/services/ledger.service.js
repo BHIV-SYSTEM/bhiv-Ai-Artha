@@ -3,11 +3,9 @@ import JournalEntry from '../models/JournalEntry.js';
 import LedgerEntry from '../models/LedgerEntry.js';
 import AccountBalance from '../models/AccountBalance.js';
 import ChartOfAccounts from '../models/ChartOfAccounts.js';
-import AuditLog from '../models/AuditLog.js';
 import logger from '../config/logger.js';
-import mongoose from 'mongoose';
 import cacheService from './cache.service.js';
-import { withTransaction, areTransactionsAvailable } from '../config/database.js';
+import { withTransaction } from '../config/database.js';
 import {
   calculateGSTBreakdown,
   buildGSTValidationError,
@@ -122,7 +120,10 @@ class LedgerService {
    * Validate that all accounts exist and are active
    */
   async validateAccounts(lines, session = null) {
-    const accountIds = lines.map(line => line.account);
+    // Dedupe: multiple lines may legitimately share one account (e.g. journal
+    // vouchers where every line maps to a fallback account). `$in` dedupes
+    // too, so comparing against the raw line count would false-fail.
+    const accountIds = [...new Set(lines.map(line => String(line.account)))];
     const query = {
       _id: { $in: accountIds },
       isActive: true,

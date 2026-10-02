@@ -411,15 +411,211 @@ class BankStatementService {
     return categoryMap[bankCategory] || 'other';
   }
 
+  // ===== DETAIL EXTRACTION (PRE-SAVE PREVIEW) =====
+
+  /**
+   * Best-effort extraction of statement metadata (account, bank, dates,
+   * balances) from an uploaded file so the upload form can pre-fill itself.
+   * Does NOT persist anything.
+   */
+  async extractDetailsFromFile(file) {
+    const text = await this._readRawText(file);
+    const transactions = await this._parseTransactionsTolerant(file);
+    return this._extractMetadataFromText(text, transactions);
+  }
+
+  async _readRawText(file) {
+    const p = (file.path || '').toLowerCase();
+    try {
+      if (p.endsWith('.csv')) {
+        return await fs.readFile(file.path, 'utf-8');
+      }
+      if (p.endsWith('.xlsx') || p.endsWith('.xls')) {
+        const XLSX = await import('xlsx');
+        const buf = await fs.readFile(file.path);
+        const workbook = XLSX.read(buf, { type: 'buffer', cellDates: true });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        return XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
+      }
+      if (p.endsWith('.pdf')) {
+        const extraction = await ocrService.extractText(file.path);
+        return extraction.text || '';
+      }
+    } catch (error) {
+      logger.warn(`Statement metadata: raw text read skipped (${error.message})`);
+    }
+    return '';
+  }
+
+  async _parseTransactionsTolerant(file) {
+    try {
+      const p = (file.path || '').toLowerCase();
+      if (p.endsWith('.csv')) return await this.parseCSV(file.path);
+      if (p.endsWith('.xlsx') || p.endsWith('.xls')) return await this.parseExcel(file.path);
+      if (p.endsWith('.pdf')) return await this.parsePDF(file.path);
+    } catch (error) {
+      logger.warn(`Statement metadata: transaction parse skipped (${error.message})`);
+    }
+    return [];
+  }
+
+  /** Format a Date as YYYY-MM-DD in LOCAL time (toISOString shifts by TZ). */
+  _formatLocalDate(date) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  }
+
+  _extractMetadataFromText(text, transactions = []) {
+    const raw = String(text || '');
+    const detected = [];
+    const result = {
+      bankName: null,
+      accountNumber: null,
+      accountHolderName: null,
+      startDate: null,
+      endDate: null,
+      openingBalance: null,
+      closingBalance: null,
+      transactionCount: transactions.length,
+      detectedFields: detected,
+    };
+
+    // --- Bank name ---
+    const banks = [
+      ['HDFC Bank', /hdfc\s*bank/i],
+      ['ICICI Bank', /icici\s*bank/i],
+      ['State Bank of India', /state\s*bank\s*of\s*india|\bsbi\b/i],
+      ['Axis Bank', /axis\s*bank/i],
+      ['Kotak Mahindra Bank', /kotak/i],
+      ['Punjab National Bank', /punjab\s*national\s*bank|\bpnb\b/i],
+      ['Bank of Baroda', /bank\s*of\s*baroda/i],
+      ['Canara Bank', /canara\s*bank/i],
+      ['IDFC First Bank', /idfc\s*first/i],
+      ['Yes Bank', /yes\s*bank/i],
+      ['IndusInd Bank', /indusind/i],
+      ['Union Bank of India', /union\s*bank/i],
+      ['Indian Bank', /indian\s*bank/i],
+      ['Federal Bank', /federal\s*bank/i],
+      ['Central Bank of India', /central\s*bank\s*of\s*india/i],
+      ['IDBI Bank', /\bidbi\b/i],
+    ];
+    for (const [name, re] of banks) {
+      if (re.test(raw)) { result.bankName = name; detected.push('bankName'); break; }
+    }
+    if (!result.bankName) {
+      const m = raw.match(/bank\s*name\s*[:-]\s*([^\n,;|]+)/i);
+      if (m?.[1] && m[1].trim().length >= 3) {
+        result.bankName = m[1].trim();
+        detected.push('bankName');
+      }
+    }
+
+    // --- Account number ---
+    const accPatterns = [
+      /a\/?c\s*(?:no\.?|number|num\.?|#)\s*[:\-#.\s]*([\d][\d\s-]{6,19})/i,
+      /account\s*(?:no\.?|number|num\.?|#)\s*[:\-#.\s]*([\d][\d\s-]{6,19})/i,
+      /\bacct\s*(?:no\.?|number)?\s*[:\-#.\s]*([\d][\d\s-]{6,19})/i,
+    ];
+    for (const p of accPatterns) {
+      const m = raw.match(p);
+      if (m?.[1]) {
+        const digits = m[1].replace(/[\s-]/g, '');
+        if (/^\d{6,20}$/.test(digits)) {
+          result.accountNumber = digits;
+          detected.push('accountNumber');
+          break;
+        }
+      }
+    }
+
+    // --- Account holder name ---
+    const namePatterns = [
+      /(?:a\/?c\s*(?:holder)?\s*name|account\s*name|account\s*holder(?:'s)?\s*name|customer\s*name|name\s*of\s*account\s*holder)\s*[:-]\s*([^\n|]+)/i,
+      /\b(mr|mrs|ms|shri)\.?\s+([A-Za-z][A-Za-z.\s]{2,60})/,
+    ];
+    for (const p of namePatterns) {
+      const m = raw.match(p);
+      const candidate = m ? ((m[2] || m[1] || '').trim()) : '';
+      if (candidate.length >= 3 && candidate.length <= 80 && !/^account/i.test(candidate)) {
+        result.accountHolderName = candidate.replace(/\s{2,}/g, ' ').replace(/[;,]+$/, '');
+        detected.push('accountHolderName');
+        break;
+      }
+    }
+
+    // --- Statement period (prefer real transactions) ---
+    const dates = transactions.map(t => t.date).filter(Boolean).sort((a, b) => a - b);
+    if (dates.length) {
+      result.startDate = this._formatLocalDate(dates[0]);
+      result.endDate = this._formatLocalDate(dates[dates.length - 1]);
+      detected.push('startDate', 'endDate');
+    } else {
+      const m = raw.match(/(?:statement\s*period|period|from\s*date)[^\d]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*(?:to|-|–|thru|through|till)\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
+      if (m) {
+        const s = this.parseDate(m[1]);
+        const e = this.parseDate(m[2]);
+        if (s) result.startDate = this._formatLocalDate(s);
+        if (e) result.endDate = this._formatLocalDate(e);
+        if (result.startDate || result.endDate) detected.push('startDate', 'endDate');
+      }
+    }
+    if (result.startDate && result.endDate && result.startDate > result.endDate) {
+      [result.startDate, result.endDate] = [result.endDate, result.startDate];
+    }
+
+    // --- Opening / closing balance ---
+    const openingMatch = raw.match(/(?:opening|opening\s*balance|balance\s*forward(?:ed)?)[^0-9-]*(-?\d[\d,]*\.\d{2})/i);
+    const closingMatch = raw.match(/(?:closing|closing\s*balance|balance\s*as\s*on|available\s*balance|closing\s*balance\s*as\s*on)[^0-9-]*(-?\d[\d,]*\.\d{2})/i);
+
+    if (openingMatch) {
+      result.openingBalance = this._parseAmount(openingMatch[1]).toFixed(2);
+      detected.push('openingBalance');
+    }
+    if (closingMatch) {
+      result.closingBalance = this._parseAmount(closingMatch[1]).toFixed(2);
+      detected.push('closingBalance');
+    }
+
+    // Fallback: derive balances from transaction running balances
+    const withBalance = transactions.filter(t => Number.isFinite(parseFloat(t.balance)));
+    if (withBalance.length) {
+      const first = withBalance[0];
+      const last = withBalance[withBalance.length - 1];
+      if (!result.openingBalance) {
+        const open = parseFloat(first.balance) + parseFloat(first.debit || 0) - parseFloat(first.credit || 0);
+        result.openingBalance = open.toFixed(2);
+        detected.push('openingBalance');
+      }
+      if (!result.closingBalance) {
+        result.closingBalance = parseFloat(last.balance).toFixed(2);
+        detected.push('closingBalance');
+      }
+    }
+
+    result.detectedFields = [...new Set(detected)];
+    return result;
+  }
+
   // ===== FILE PARSING =====
 
   async parseCSV(filePath) {
     try {
       const fileContent = await fs.readFile(filePath, 'utf-8');
-      const records = parse(fileContent, {
+      // Bank CSVs often start with preamble rows (bank name, account info)
+      // before the real column header. Find the header row so parsing works.
+      const lines = fileContent.split(/\r?\n/);
+      const headerIndex = lines.findIndex(
+        (line) =>
+          /date/i.test(line) &&
+          /(debit|withdrawal|credit|deposit|amount|balance|description|particulars|narration)/i.test(line),
+      );
+      const content = headerIndex > 0 ? lines.slice(headerIndex).join('\n') : fileContent;
+
+      const records = parse(content, {
         columns: true,
         skip_empty_lines: true,
         trim: true,
+        relax_column_count: true,
       });
 
       const transactions = records.map(record => {

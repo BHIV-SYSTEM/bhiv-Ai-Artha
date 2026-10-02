@@ -171,26 +171,6 @@ class PushNotificationService {
     return results;
   }
 
-  async sendLocationAlert(agentId, agentName, event, dealerName) {
-    const titles = {
-      'arrived': `${agentName} arrived at ${dealerName}`,
-      'left': `${agentName} left ${dealerName}`,
-      'idle': `${agentName} idle for 15+ minutes`,
-      'offline': `${agentName} went offline`,
-      'online': `${agentName} is back online`,
-    };
-
-    return this.sendNotification({
-      title: titles[event] || `${agentName}: ${event}`,
-      body: `Location event: ${event} at ${new Date().toLocaleTimeString()}`,
-      type: 'location',
-      category: 'niyantran',
-      recipientId: agentId,
-      data: { event, agentName, dealerName, timestamp: new Date().toISOString() },
-      priority: event === 'offline' ? 'high' : 'normal',
-    });
-  }
-
   async sendPaymentNotification(agentId, dealerName, amount, type) {
     return this.sendNotification({
       title: `${type === 'received' ? 'Payment received' : 'Payment pending'}: ${dealerName}`,

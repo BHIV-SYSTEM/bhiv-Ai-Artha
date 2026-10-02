@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
+import companyScope from '../utils/companyScope.js';
 
 const validateDecimal = {
   validator: (v) => v === '' || v === null || v === undefined || (!isNaN(Number(v)) && isFinite(Number(v))),
@@ -71,5 +72,7 @@ const costCentreSchema = new mongoose.Schema({
 
 costCentreSchema.index({ companyId: 1, type: 1 });
 costCentreSchema.index({ code: 1, companyId: 1 });
+
+costCentreSchema.plugin(companyScope);
 
 export default mongoose.model('CostCentre', costCentreSchema);

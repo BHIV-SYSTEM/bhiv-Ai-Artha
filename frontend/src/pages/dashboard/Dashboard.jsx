@@ -38,10 +38,17 @@ const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'
 
 const roleConfig = {
   admin: {
-    label: 'Administrator',
+    label: 'Super Admin',
     color: 'red',
     icon: Shield,
     description: 'You have full access to all features and settings.',
+    bgGradient: 'from-red-500 to-red-600',
+  },
+  sub_admin: {
+    label: 'Admin',
+    color: 'red',
+    icon: Shield,
+    description: 'You have full access to your company and employees.',
     bgGradient: 'from-red-500 to-red-600',
   },
   accountant: {
@@ -75,7 +82,9 @@ const Dashboard = () => {
     bankTimelineChart: [],
   });
 
-  const userRole = user?.role || 'viewer';
+  // Sub-admin (client company admin) gets admin-level dashboard widgets.
+  const rawRole = user?.role || 'viewer';
+  const userRole = rawRole;
   const currentRoleConfig = roleConfig[userRole] || roleConfig.viewer;
   const RoleIcon = currentRoleConfig.icon;
 

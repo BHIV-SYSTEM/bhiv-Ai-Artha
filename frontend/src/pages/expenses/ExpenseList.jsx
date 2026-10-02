@@ -26,9 +26,11 @@ import {
 } from '../../components/common';
 import api from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 const ExpenseList = () => {
   const navigate = useNavigate();
+  const can = useCan();
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -114,9 +116,11 @@ const ExpenseList = () => {
         title="Expenses"
         description="Track and manage your business expenses"
         action={
-          <Button onClick={() => navigate('/expenses/new')} icon={Plus}>
-            Add Expense
-          </Button>
+          can(['admin', 'accountant']) && (
+            <Button onClick={() => navigate('/expenses/new')} icon={Plus}>
+              Add Expense
+            </Button>
+          )
         }
       />
 
@@ -160,8 +164,8 @@ const ExpenseList = () => {
             icon={Receipt}
             title="No expenses found"
             description="Start tracking your business expenses by adding your first expense."
-            actionLabel="Add Expense"
-            onAction={() => navigate('/expenses/new')}
+            actionLabel={can(['admin', 'accountant']) ? 'Add Expense' : undefined}
+            onAction={can(['admin', 'accountant']) ? () => navigate('/expenses/new') : undefined}
           />
         </Card>
       ) : (
@@ -212,12 +216,14 @@ const ExpenseList = () => {
                   </Table.Cell>
                   <Table.Cell>
                     <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => navigate(`/expenses/${expense._id}/edit`)}
-                        className="p-1.5 hover:bg-muted rounded-lg"
-                      >
-                        <Edit className="w-4 h-4 text-muted-foreground" />
-                      </button>
+                      {can(['admin', 'accountant']) && (
+                        <button
+                          onClick={() => navigate(`/expenses/${expense._id}/edit`)}
+                          className="p-1.5 hover:bg-muted rounded-lg"
+                        >
+                          <Edit className="w-4 h-4 text-muted-foreground" />
+                        </button>
+                      )}
                     </div>
                   </Table.Cell>
                 </Table.Row>

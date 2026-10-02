@@ -62,9 +62,51 @@ class AuditService {
     return crypto.createHash('sha256').update(payload).digest('hex');
   }
 
-  async recordEvent(data) {
+  /**
+   * Legacy callers pass `{ eventType, userId, details }` while the model
+   * requires `action`, `description` and `actor.userId`. Fill the gaps here
+   * (single choke point) instead of touching every call site.
+   */
+  _normalize(data) {
+    const actorUserId = data.actor?.userId || data.userId;
+    const action = data.action || data.eventType;
+    let description = data.description;
+    if (!description) {
+      const detail = data.details && Object.keys(data.details).length
+        ? Object.entries(data.details).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')
+        : '';
+      description = detail ? `${action}: ${detail}` : `${data.entityType} ${action}`;
+      if (description.length > 500) description = `${description.slice(0, 497)}...`;
+    }
+    let category = data.category;
+    if (!category) {
+      if (/^(GSTR|FORM\d|GST_|TDS_)/.test(data.eventType)) category = 'compliance';
+      else if (/^(INVOICE|EXPENSE|JOURNAL|BANK|RECONCILIATION|BALANCE_SHEET|CASH_FLOW|PROFIT_LOSS|TRIAL_BALANCE)/.test(data.eventType)) category = 'financial';
+      else category = 'system';
+    }
+    return {
+      ...data,
+      actorUserId,
+      action,
+      description,
+      category,
+      actor: { ...data.actor, userId: actorUserId },
+    };
+  }
+
+  async recordEvent(rawData) {
     try {
+      const data = this._normalize(rawData);
       await this.init();
+
+      if (!data.actorUserId) {
+        logger.warn('Audit event skipped: no actor user', {
+          eventType: data.eventType,
+          entityType: data.entityType,
+          entityId: String(data.entityId),
+        });
+        return null;
+      }
 
       const eventId = AuditEvent.generateEventId();
 
@@ -83,19 +125,19 @@ class AuditService {
       const event = new AuditEvent({
         eventId,
         eventType: data.eventType,
-        category: data.category || 'system',
+        category: data.category,
         severity: data.severity || 'info',
         entityType: data.entityType,
         entityId: data.entityId,
         action: data.action,
         description: data.description,
         actor: {
-          userId: data.actor?.userId,
-          email: data.actor?.email,
-          name: data.actor?.name,
-          role: data.actor?.role,
-          ip: data.actor?.ip,
-          userAgent: data.actor?.userAgent,
+          userId: data.actor.userId,
+          email: data.actor.email,
+          name: data.actor.name,
+          role: data.actor.role,
+          ip: data.actor.ip,
+          userAgent: data.actor.userAgent,
         },
         before: data.before || null,
         after: data.after || null,
@@ -277,7 +319,7 @@ class AuditService {
     return this.recordEvent({ ...data, eventType: 'LOGOUT', category: 'security', severity: 'info' });
   }
 
-  async exportAuditTrail(filters = {}, format = 'json') {
+  async exportAuditTrail(filters = {}, _format = 'json') {
     const events = await AuditEvent.find(filters).sort({ createdAt: 1 }).lean();
     return events;
   }

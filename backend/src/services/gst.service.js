@@ -1,9 +1,12 @@
 import Decimal from 'decimal.js';
+import { randomUUID } from 'crypto';
 import GSTReturn from '../models/GSTReturn.js';
 import Invoice from '../models/Invoice.js';
-import CompanySettings from '../models/CompanySettings.js';
+import companySettingsService from './companySettings.service.js';
 import logger from '../config/logger.js';
 import { calculateGSTBreakdown } from './gstEngine.service.js';
+import auditService from './audit.service.js';
+import evidenceAutomationService from './evidenceAutomation.service.js';
 
 class GSTService {
   /**
@@ -34,7 +37,7 @@ class GSTService {
    */
   async generateGSTR1(month, year) {
     try {
-      const settings = await CompanySettings.findById('company_settings');
+      const settings = await companySettingsService.getSettings();
       
       if (!settings || !settings.gstin) {
         throw new Error('Company GSTIN not configured');
@@ -190,7 +193,7 @@ class GSTService {
    */
   async generateGSTR3B(month, year) {
     try {
-      const settings = await CompanySettings.findById('company_settings');
+      const settings = await companySettingsService.getSettings();
       
       if (!settings || !settings.gstin) {
         throw new Error('Company GSTIN not configured');
@@ -283,27 +286,62 @@ class GSTService {
   }
   
   /**
-   * File GST return
+   * File GST return (records the portal-handoff filing outcome)
    */
-  async fileGSTReturn(returnId, userId) {
+  async fileGSTReturn(returnId, userId, filingMeta = {}) {
     const gstReturn = await GSTReturn.findById(returnId);
-    
+
     if (!gstReturn) {
       throw new Error('GST return not found');
     }
-    
+
     if (gstReturn.status === 'filed') {
       throw new Error('Return is already filed');
     }
-    
+
+    const { acknowledgementNumber, portalUrl, filedVia } = filingMeta;
+
     gstReturn.status = 'filed';
     gstReturn.filedDate = new Date();
     gstReturn.filedBy = userId;
-    
+    if (acknowledgementNumber) gstReturn.acknowledgementNumber = String(acknowledgementNumber).trim();
+    if (portalUrl) gstReturn.portalUrl = String(portalUrl).trim();
+    if (filedVia) gstReturn.filedVia = filedVia;
+
     await gstReturn.save();
-    
+
     logger.info(`GST return filed: ${gstReturn.returnType} for ${gstReturn.period.month}/${gstReturn.period.year}`);
-    
+
+    await auditService.recordEvent({
+      eventType: 'GST_RETURN_FILED',
+      entityType: 'GSTReturn',
+      entityId: gstReturn._id.toString(),
+      traceId: randomUUID(),
+      userId,
+      details: {
+        returnType: gstReturn.returnType,
+        period: `${gstReturn.period.month}/${gstReturn.period.year}`,
+        gstin: gstReturn.gstin,
+        acknowledgementNumber: gstReturn.acknowledgementNumber || null,
+        portalUrl: gstReturn.portalUrl || null,
+        filedVia: gstReturn.filedVia,
+      },
+    });
+
+    await evidenceAutomationService.captureAPIResponse({
+      operation: 'fileGSTReturn',
+      entityType: 'GSTReturn',
+      entityId: gstReturn._id.toString(),
+      request: { returnId, filingMeta },
+      response: {
+        success: true,
+        status: gstReturn.status,
+        filedDate: gstReturn.filedDate,
+        acknowledgementNumber: gstReturn.acknowledgementNumber || null,
+      },
+      traceId: randomUUID(),
+    });
+
     return gstReturn;
   }
   

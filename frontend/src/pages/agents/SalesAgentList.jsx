@@ -4,9 +4,11 @@ import { Plus, Search, User, MapPin, Target, Phone, Filter } from 'lucide-react'
 import { PageHeader, Card, Button, Table, Badge, Input, Select, Loading, EmptyState, ProgressBar } from '../../components/common';
 import api from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 const SalesAgentList = () => {
   const navigate = useNavigate();
+  const can = useCan();
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -49,8 +51,9 @@ const SalesAgentList = () => {
         description="Manage Bright Connection field sales team and performance"
         action={
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => navigate('/niyantran')} icon={MapPin}>Live Map</Button>
-            <Button onClick={() => navigate('/agents/new')} icon={Plus}>Add Agent</Button>
+            {can(['admin']) && (
+              <Button onClick={() => navigate('/agents/new')} icon={Plus}>Add Agent</Button>
+            )}
           </div>
         }
       />
@@ -132,8 +135,8 @@ const SalesAgentList = () => {
             icon={User}
             title="No sales agents"
             description="Add agents to start tracking field performance."
-            actionLabel="Add Agent"
-            onAction={() => navigate('/agents/new')}
+            actionLabel={can(['admin']) ? 'Add Agent' : undefined}
+            onAction={can(['admin']) ? () => navigate('/agents/new') : undefined}
           />
         </Card>
       ) : (

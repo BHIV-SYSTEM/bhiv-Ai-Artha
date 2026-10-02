@@ -30,6 +30,7 @@ import {
 import api from '../../services/api';
 import toast from 'react-hot-toast';
 import { formatCurrency, getFinancialYear } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 const getPeriodDates = (period, reportContext, statementMonth) => {
   if (period === 'statement_month' && statementMonth && reportContext?.availableMonths?.length) {
@@ -84,6 +85,7 @@ const getPeriodDates = (period, reportContext, statementMonth) => {
 };
 
 const CashFlow = () => {
+  const can = useCan();
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState('current_fy');
   const [reportContext, setReportContext] = useState(null);
@@ -197,15 +199,12 @@ const CashFlow = () => {
   const handleExport = async () => {
     try {
       const { startDate, endDate } = getPeriodDates(period, reportContext, statementMonth);
-      const url = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/reports/cash-flow/export?startDate=${startDate}&endDate=${endDate}`;
-      
-      const response = await fetch(url, {
-        credentials: 'include',
-      });
-      
-      if (!response.ok) throw new Error('Export failed');
-      
-      const blob = await response.blob();
+      const response = await api.get(
+        `/reports/cash-flow/export?startDate=${startDate}&endDate=${endDate}`,
+        { responseType: 'blob' }
+      );
+
+      const blob = new Blob([response.data]);
       const downloadUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = downloadUrl;
@@ -281,9 +280,11 @@ const CashFlow = () => {
                 className="w-56"
               />
             )}
-            <Button variant="secondary" icon={Download} onClick={handleExport}>
-              Export PDF
-            </Button>
+            {can(['admin']) && (
+              <Button variant="secondary" icon={Download} onClick={handleExport}>
+                Export PDF
+              </Button>
+            )}
           </div>
         }
       />

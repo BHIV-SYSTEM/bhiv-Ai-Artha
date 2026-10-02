@@ -16,8 +16,10 @@ import {
 import api from '../../services/api';
 import toast from 'react-hot-toast';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 const TrialBalance = () => {
+  const can = useCan();
   const [loading, setLoading] = useState(true);
   const [asOfDate, setAsOfDate] = useState(new Date().toISOString().split('T')[0]);
   const [data, setData] = useState(null);
@@ -86,15 +88,12 @@ const TrialBalance = () => {
 
   const handleExport = async () => {
     try {
-      const url = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/reports/trial-balance/export?asOfDate=${asOfDate}`;
-      
-      const response = await fetch(url, {
-        credentials: 'include',
-      });
-      
-      if (!response.ok) throw new Error('Export failed');
-      
-      const blob = await response.blob();
+      const response = await api.get(
+        `/reports/trial-balance/export?asOfDate=${asOfDate}`,
+        { responseType: 'blob' }
+      );
+
+      const blob = new Blob([response.data]);
       const downloadUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = downloadUrl;
@@ -163,9 +162,11 @@ const TrialBalance = () => {
               onChange={(e) => setAsOfDate(e.target.value)}
               className="px-3 py-2 border border-border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
-            <Button variant="secondary" icon={Download} onClick={handleExport}>
-              Export PDF
-            </Button>
+            {can(['admin']) && (
+              <Button variant="secondary" icon={Download} onClick={handleExport}>
+                Export PDF
+              </Button>
+            )}
           </div>
         }
       />

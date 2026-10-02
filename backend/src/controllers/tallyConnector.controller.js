@@ -7,6 +7,10 @@ import TallyParty from '../models/TallyParty.js';
 import TallyOutstanding from '../models/TallyOutstanding.js';
 import TallyVoucher from '../models/TallyVoucher.js';
 import TallySyncRun from '../models/TallySyncRun.js';
+import TallyConnectorCredential, {
+  generateApiKey,
+  generateHmacSecret,
+} from '../models/TallyConnectorCredential.js';
 
 /**
  * tallyConnector.controller — HTTP surface for the read-only Tally connector.
@@ -139,6 +143,86 @@ export const syncNow = async (req, res) => {
   }
 };
 
+/**
+ * GET /tally-connect/credentials — issue (on first call) and return the
+ * calling account's connector credentials. Bound to req.workspaceId so data
+ * pushed with them is visible only to this account.
+ */
+export const getCredentials = async (req, res) => {
+  try {
+    const workspace = req.workspaceId;
+    if (!workspace) {
+      return res.status(400).json({ success: false, message: 'No workspace for this account' });
+    }
+    let cred = await TallyConnectorCredential.findOne({ workspaceId: workspace });
+    if (!cred) {
+      cred = await TallyConnectorCredential.create({
+        workspaceId: workspace,
+        apiKey: generateApiKey(),
+        hmacSecret: generateHmacSecret(),
+        label: `${req.user?.name || 'Account'} connector`,
+      });
+    }
+    res.json({
+      success: true,
+      data: {
+        cloudUrl: `${req.protocol}://${req.get('host')}`,
+        apiKey: cred.apiKey,
+        hmacSecret: cred.hmacSecret,
+        active: cred.active,
+        createdAt: cred.createdAt,
+      },
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      // Race: another request issued it first — re-read and return.
+      const existing = await TallyConnectorCredential.findOne({ workspaceId: req.workspaceId });
+      if (existing) {
+        return res.json({
+          success: true,
+          data: {
+            cloudUrl: `${req.protocol}://${req.get('host')}`,
+            apiKey: existing.apiKey,
+            hmacSecret: existing.hmacSecret,
+            active: existing.active,
+            createdAt: existing.createdAt,
+          },
+        });
+      }
+    }
+    res.status(500).json({ success: false, message: 'Could not issue connector credentials' });
+  }
+};
+
+/** POST /tally-connect/credentials/rotate — regenerate this account's keys. */
+export const rotateCredentials = async (req, res) => {
+  try {
+    const workspace = req.workspaceId;
+    if (!workspace) {
+      return res.status(400).json({ success: false, message: 'No workspace for this account' });
+    }
+    const cred = await TallyConnectorCredential.findOneAndUpdate(
+      { workspaceId: workspace },
+      {
+        $set: { apiKey: generateApiKey(), hmacSecret: generateHmacSecret(), active: true },
+        $setOnInsert: { workspaceId: workspace },
+      },
+      { upsert: true, new: true },
+    );
+    res.json({
+      success: true,
+      data: {
+        cloudUrl: `${req.protocol}://${req.get('host')}`,
+        apiKey: cred.apiKey,
+        hmacSecret: cred.hmacSecret,
+        active: cred.active,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Could not rotate credentials' });
+  }
+};
+
 export const syncStatus = async (req, res) => {
   res.json({ success: true, data: tallySyncScheduler.status() });
 };
@@ -171,4 +255,6 @@ export default {
   syncNow,
   syncStatus,
   readonlyProof,
+  getCredentials,
+  rotateCredentials,
 };

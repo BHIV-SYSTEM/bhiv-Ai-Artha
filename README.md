@@ -301,7 +301,6 @@ http://localhost:5173
 | `/dealers/:id` | Dealer Detail | Outstanding bills table, transactions, visit history |
 | `/agents` | Sales Agents | 5 agents with target progress, role filter, online status |
 | `/agents/:id` | Agent Detail | Daily stats, 7-day performance, current GPS location |
-| `/niyantran` | Niyantran | Live GPS tracking, online/offline status, battery, active visits, filter by status |
 | `/vouchers` | Vouchers | Tally-synced voucher data |
 | `/ledgers` | Ledgers | Chart of accounts, account balances |
 | `/reports` | Reports | P&L, Balance Sheet, Cash Flow, Trial Balance |
@@ -312,8 +311,7 @@ http://localhost:5173
 2. **Dashboard** (2 min) — Walk through financial KPIs, revenue charts
 3. **Dealer Management** (5 min) — Show dealer grid, click into a dealer with overdue amount, show outstanding bills
 4. **Sales Agents** (4 min) — Show agent list with target progress, click into an agent to see daily stats
-5. **Niyantran** (4 min) — Show live GPS tracking, filter by "Online"/"At Dealer"/"Offline", show active visits
-6. **Existing Features** (3 min) — Briefly show Vouchers, Ledgers, Reports
+5. **Existing Features** (3 min) — Briefly show Vouchers, Ledgers, Reports
 
 ### Demo Talking Points
 
@@ -321,7 +319,6 @@ http://localhost:5173
 |---------|---------------|
 | Tally Connector | Automatic data sync — no manual entry, no errors |
 | Dealer CRM | Outstanding tracking, overdue alerts, complete dealer history |
-| Niyantran | Real-time GPS tracking, check-in/out, field force visibility |
 | Sales Agents | Target vs achievement, daily performance, route optimization |
 | Notifications | Payment alerts, overdue warnings, agent updates |
 | Reports | GST, P&L, Balance Sheet — all from live Tally data |
@@ -334,12 +331,7 @@ TallyPrime (office PC)     Cloud ARTHA (MongoDB Atlas)
       │  Connector (HMAC push)   │
       ├─────────────────────────►│
       │                          │
-Niyantran App (field)       Backend API (port 5000)
-      │                          │
-      │  GPS Pings               │
-      ├─────────────────────────►│
-                                 │
-                          Frontend (port 5173)
+                           Frontend (port 5173)
 ```
 
 ### Stopping the Demo
@@ -526,36 +518,6 @@ GET /ready
 
 # Liveness probe
 GET /live
-```
-
-### Niyantran (Location Tracking)
-```bash
-# Record GPS ping
-POST /api/v1/niyantran/ping
-Body: { latitude, longitude, accuracy, batteryLevel, networkType, deviceId }
-
-# Get all agent locations
-GET /api/v1/niyantran/agents/location
-
-# Get specific agent location
-GET /api/v1/niyantran/agents/:agentId/location
-
-# Get agent route history
-GET /api/v1/niyantran/agents/:agentId/route?startDate=...&endDate=...
-
-# Check-in at dealer
-POST /api/v1/niyantran/visit/check-in
-Body: { dealerId, latitude, longitude, address, visitType, purpose }
-
-# Check-out from dealer
-PUT /api/v1/niyantran/visit/:visitId/check-out
-Body: { latitude, longitude, address, notes, outcome }
-
-# Get active visits
-GET /api/v1/niyantran/visits/active
-
-# Get all visits (with filters)
-GET /api/v1/niyantran/visits?agentId=...&status=...&startDate=...&endDate=...
 ```
 
 ### Dealer Management
@@ -847,7 +809,7 @@ This verifies:
 - **HMAC-SHA256** for ledger hash-chain
 - **JWT** for authentication
 - **web-push** for browser push notifications (VAPID-authenticated)
-- **51 Services** — Core accounting, compliance, BHIV governance, integration, runtime, infrastructure, Niyantran, Dealer CRM, Sales Agents, Push Notifications
+- **51 Services** — Core accounting, compliance, BHIV governance, integration, runtime, infrastructure, Dealer CRM, Sales Agents, Push Notifications
 - **30 Controllers** — Request handlers for all API endpoints
 - **31 Route Files** — RESTful API routing
 - **11 Middleware** — Auth, authority enforcement, policy engine, security, monitoring, caching
@@ -911,15 +873,15 @@ This verifies:
 34. InsightFlowExperience — User behavior analytics
 35. JournalLine — (embedded in JournalEntry) individual debit/credit lines
 
-**Niyantran & Field Force (6):**
-36. LocationPing — GPS pings from Niyantran app (lat/lng, battery, network, dealer proximity)
+**Field Force (6):**
+36. LocationPing — GPS location pings (lat/lng, battery, network, dealer proximity)
 37. Visit — Dealer check-in/out, duration, outcome, orders, collection amount
 38. Dealer — Bright Connection dealer CRM (outstanding, overdue, GSTIN, region, assigned agent)
 39. SalesAgent — Field sales team (role, target, assigned dealers, last known location)
 40. DeviceToken — Push notification device tokens (FCM/APNs)
 41. Notification — In-app and push notifications (payment alerts, overdue warnings, agent updates)
 
-### Key Services (51)
+### Key Services (50)
 
 **Core Accounting (10):**
 - Authentication Service — JWT login/signup, password hashing
@@ -984,8 +946,7 @@ This verifies:
 - OCR Service — Receipt image text extraction (Tesseract.js)
 - PDF Service — PDF generation for reports and invoices
 
-**Niyantran & Field Force (4):**
-- Niyantran Service — GPS ping recording, haversine distance, dealer proximity, check-in/out
+**Field Force (3):**
 - Dealer Service — Dealer CRUD, Tally sync, outstanding tracking, stats
 - Sales Agent Service — Agent CRUD, dashboard, performance history, dealer assignment
 - Push Notification Service — Web-push broadcast, VAPID auth, device token lifecycle, auto-deactivate expired (HTTP 410)

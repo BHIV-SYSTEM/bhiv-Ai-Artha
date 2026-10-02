@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import logger from '../config/logger.js';
 import { getResolvedUrls } from '../config/urls.js';
+import { runWithScope } from '../utils/companyScope.js';
 
 const COOKIE_NAME = 'blackhole_token';
 const JWT_SECRET_ENV_CANDIDATES = [
@@ -162,7 +163,7 @@ export const protect = async (req, res, next) => {
 
       const User = await getUserModel();
       if (User) {
-        const user = await User.findById(decoded.user_id).select('_id email name role roles isActive allowedApps');
+        const user = await User.findById(decoded.user_id).select('_id email name role roles companyId isActive allowedApps');
         if (!user) {
           clearBlackholeCookie(res);
           if (req.accepts('json') === 'json') {
@@ -193,6 +194,7 @@ export const protect = async (req, res, next) => {
           name: user.name || user.email?.split('@')[0] || 'User',
           roles: user.roles || [user.role],
           role: user.role,
+          companyId: user.companyId || null,
           allowedApps: user.allowedApps || [],
           isActive: user.isActive,
         };
@@ -204,6 +206,7 @@ export const protect = async (req, res, next) => {
           name: decoded.name || decoded.email?.split('@')[0] || 'User',
           roles: decoded.roles || [],
           role: decoded.roles?.[0] || 'user',
+          companyId: decoded.companyId || null,
           allowedApps: decoded.allowedApps || [],
           isActive: true,
         };
@@ -221,7 +224,19 @@ export const protect = async (req, res, next) => {
         return res.redirect(`${getResolvedUrls().SPA_URL}/login?error=app_not_allowed`);
       }
 
-      next();
+      // Everything downstream of `protect` runs inside the user's workspace
+      // scope so the companyScope plugin can isolate all data access.
+      const workspace = req.user.companyId || req.user._id;
+      req.workspaceId = workspace;
+      return runWithScope(
+        {
+          workspace,
+          userId: req.user._id,
+          role: req.user.role,
+          crossCompany: false,
+        },
+        next
+      );
     } catch (err) {
       logger.error('JWT verification failed:', err.message);
       clearBlackholeCookie(res);
@@ -250,8 +265,13 @@ export const authorize = (...roles) => {
     }
 
     const userRoles = req.user.roles || [];
+    // A sub-admin is the client company's admin: full in-app access within
+    // their own company workspace (data isolation still applies).
+    const effectiveRoles = userRoles.includes('sub_admin')
+      ? [...new Set([...userRoles, 'admin', 'accountant', 'viewer'])]
+      : userRoles;
     const hasRole = roles.some(
-      (r) => userRoles.includes(r) || req.user.role === r,
+      (r) => effectiveRoles.includes(r) || req.user.role === r,
     );
 
     if (!hasRole) {

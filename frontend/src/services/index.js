@@ -4,6 +4,8 @@ import api from './api';
 export const invoiceService = {
   getAll: (params) => api.get('/invoices', { params }),
   getById: (id) => api.get(`/invoices/${id}`),
+  getShared: (id) => api.get(`/invoices/${id}/shared`),
+  getSharedList: () => api.get('/invoices/shared'),
   create: (data) => api.post('/invoices', data),
   update: (id, data) => api.put(`/invoices/${id}`, data),
   delete: (id) => api.delete(`/invoices/${id}`),
@@ -189,6 +191,13 @@ export const bankStatementService = {
   process: (id) => api.post(`/statements/${id}/process`),
   matchTransactions: (id) => api.post(`/statements/${id}/match`),
   createExpenses: (id, transactionIds) => api.post(`/statements/${id}/create-expenses`, { transactionIds }),
+  extract: (file) => {
+    const formData = new FormData();
+    formData.append('statement', file);
+    return api.post('/statements/extract', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then((res) => res.data.data);
+  },
   delete: (id) => api.delete(`/statements/${id}`),
 };
 
@@ -200,18 +209,6 @@ export const mitraService = {
   analyzeStatement: (message, statementId) => api.post('/mitra/analyze-statement', { message, statementId }),
   getCapabilities: () => api.get('/mitra/capabilities'),
   health: () => api.get('/mitra/health'),
-};
-
-// Niyantran Location Services
-export const niyantranService = {
-  recordPing: (data) => api.post('/niyantran/ping', data),
-  getAllLocations: () => api.get('/niyantran/agents/location'),
-  getAgentLocation: (agentId) => api.get(`/niyantran/agents/${agentId}/location`),
-  getAgentRoute: (agentId, params) => api.get(`/niyantran/agents/${agentId}/route`, { params }),
-  checkIn: (data) => api.post('/niyantran/visit/check-in', data),
-  checkOut: (visitId, data) => api.put(`/niyantran/visit/${visitId}/check-out`, data),
-  getActiveVisits: () => api.get('/niyantran/visits/active'),
-  getVisits: (params) => api.get('/niyantran/visits', { params }),
 };
 
 // Dealer Services

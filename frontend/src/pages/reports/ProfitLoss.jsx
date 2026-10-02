@@ -30,6 +30,7 @@ import {
 import api, { API_BASE_URL } from '../../services/api';
 import toast from 'react-hot-toast';
 import { formatCurrency, getFinancialYear, exportReportPDF } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 const getPeriodDates = (period, reportContext, statementMonth) => {
   if (period === 'statement_month' && statementMonth && reportContext?.availableMonths?.length) {
@@ -84,6 +85,7 @@ const getPeriodDates = (period, reportContext, statementMonth) => {
 };
 
 const ProfitLoss = () => {
+  const can = useCan();
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState('current_fy');
   const [reportContext, setReportContext] = useState(null);
@@ -256,9 +258,11 @@ const ProfitLoss = () => {
                 className="w-56"
               />
             )}
-            <Button variant="secondary" icon={Download} onClick={handleExport}>
-              Export PDF
-            </Button>
+            {can(['admin']) && (
+              <Button variant="secondary" icon={Download} onClick={handleExport}>
+                Export PDF
+              </Button>
+            )}
           </div>
         }
       />

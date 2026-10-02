@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import companyScope from '../utils/companyScope.js';
 
 const notificationSchema = new mongoose.Schema({
   title: {
@@ -17,7 +18,7 @@ const notificationSchema = new mongoose.Schema({
   },
   category: {
     type: String,
-    enum: ['niyantran', 'crm', 'finance', 'compliance', 'system', 'tally'],
+    enum: ['crm', 'finance', 'compliance', 'system', 'tally'],
     default: 'system',
     index: true,
   },
@@ -78,6 +79,16 @@ const notificationSchema = new mongoose.Schema({
 notificationSchema.index({ recipientId: 1, isRead: 1 });
 notificationSchema.index({ createdAt: -1 });
 notificationSchema.index({ type: 1, createdAt: -1 });
+
+notificationSchema.add({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
+});
+notificationSchema.plugin(companyScope);
 
 notificationSchema.set('toJSON', { virtuals: true });
 

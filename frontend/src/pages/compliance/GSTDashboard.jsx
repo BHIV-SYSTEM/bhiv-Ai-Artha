@@ -37,15 +37,20 @@ import {
 } from '../../components/common';
 import api from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 const GSTDashboard = () => {
   const navigate = useNavigate();
+  const can = useCan();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
   const [period, setPeriod] = useState('current_month');
   const [showFilingModal, setShowFilingModal] = useState(false);
   const [selectedReturn, setSelectedReturn] = useState(null);
   const [filing, setFiling] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [preparedId, setPreparedId] = useState(null);
+  const [arn, setArn] = useState('');
 
   useEffect(() => {
     fetchGSTData();
@@ -84,27 +89,45 @@ const GSTDashboard = () => {
     }
   };
 
-  const handleExportGSTR1 = async () => {
+  const GST_PORTAL_URL = import.meta.env.VITE_GST_PORTAL_URL || 'https://www.gst.gov.in';
+
+  const openGstPortal = () => {
+    window.open(GST_PORTAL_URL, '_blank', 'noopener,noreferrer');
+  };
+
+  const exportFilingPacket = async (type) => {
+    const periodParam = getPeriodParam();
+    const label = type === 'gstr-3b' ? 'GSTR-3B' : 'GSTR-1';
     try {
-      const periodParam = getPeriodParam();
       const response = await api.get(
-        `/gst/filing-packet/export?type=gstr-1&period=${periodParam}`,
+        `/gst/filing-packet/export?type=${type}&period=${periodParam}`,
         { responseType: 'blob' }
       );
       const blob = new Blob([response.data]);
       const downloadUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = downloadUrl;
-      link.download = `GSTR-1-${periodParam}.csv`;
+      link.download = `${label}-${periodParam}.csv`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(downloadUrl);
-      toast.success('GSTR-1 exported successfully');
+      toast.success(`${label} filing packet downloaded`);
+      return true;
     } catch (error) {
       console.error('Export failed:', error);
-      toast.error('Failed to export GSTR-1');
+      toast.error(`Failed to export ${label}`);
+      return false;
     }
+  };
+
+  const handleExportGSTR1 = () => exportFilingPacket('gstr-1');
+
+  // Hand off to the government portal: download our packet, open gst.gov.in
+  const handleFileOnPortal = async () => {
+    await exportFilingPacket(packetTypeFor(selectedReturn?.type));
+    openGstPortal();
+    toast.success('Filing packet downloaded. Complete the filing on gst.gov.in.');
   };
 
   const periodOptions = [
@@ -117,6 +140,7 @@ const GSTDashboard = () => {
   const getStatusBadge = (status) => {
     const config = {
       filed: { variant: 'success', label: 'Filed', icon: CheckCircle },
+      revised: { variant: 'success', label: 'Revised', icon: CheckCircle },
       pending: { variant: 'warning', label: 'Pending', icon: Clock },
       not_filed: { variant: 'default', label: 'Not Filed', icon: FileText },
       overdue: { variant: 'danger', label: 'Overdue', icon: AlertTriangle },
@@ -130,35 +154,75 @@ const GSTDashboard = () => {
     );
   };
 
-  const handleFileReturn = async () => {
-    if (!selectedReturn) return;
-    setFiling(true);
+  const packetTypeFor = (type) => (type === 'GSTR-3B' ? 'gstr-3b' : 'gstr-1');
+
+  // Ensure a GSTReturn doc exists for the selected period (packet generation
+  // upserts it and returns its id) so filing can be recorded against it.
+  const prepareReturnDoc = async () => {
+    if (selectedReturn?._id) return selectedReturn._id;
+    if (preparedId) return preparedId;
+    const type = packetTypeFor(selectedReturn?.type);
+    setPreparing(true);
     try {
-      if (selectedReturn._id) {
-        // File an existing GSTReturn document by its DB id
-        await api.post(`/gst/returns/${selectedReturn._id}/file`);
-      } else {
-        // Generate the packet first (creates the GSTReturn doc) then note it as filed
-        const periodParam = getPeriodParam();
-        const genEndpoint = selectedReturn.type === 'GSTR-1'
-          ? `/gst/filing-packet/gstr-1?period=${periodParam}`
-          : `/gst/filing-packet/gstr-3b?period=${periodParam}`;
-        await api.get(genEndpoint);
-      }
-      toast.success(`${selectedReturn.type} submitted successfully!`);
-      setShowFilingModal(false);
-      fetchGSTData();
+      const response = await api.get(`/gst/filing-packet/${type}?period=${getPeriodParam()}`);
+      const id = response.data?.data?.returnId || response.data?.returnId;
+      if (!id) throw new Error('Filing packet did not return a record id');
+      setPreparedId(id);
+      return id;
     } catch (error) {
-      console.error('File return error:', error);
-      toast.error(error.response?.data?.message || 'Failed to submit return');
+      console.error('Prepare return error:', error);
+      toast.error(error.response?.data?.message || 'Could not prepare the return record');
+      throw error;
     } finally {
-      setFiling(false);
+      setPreparing(false);
     }
   };
 
   const openFilingModal = (returnItem) => {
     setSelectedReturn(returnItem);
+    setArn('');
+    setPreparedId(null);
     setShowFilingModal(true);
+    if (!returnItem?._id) {
+      // Auto-prepare the return doc in the background (id stored in state)
+      prepareReturnDoc().catch(() => {});
+    }
+  };
+
+  const closeFilingModal = () => {
+    setShowFilingModal(false);
+    setSelectedReturn(null);
+    setArn('');
+    setPreparedId(null);
+  };
+
+  // Record the outcome of filing on the official portal: store ARN + portal
+  // link against the return doc so the report is auditable and real.
+  const handleSaveFiling = async () => {
+    if (!selectedReturn) return;
+    setFiling(true);
+    try {
+      const returnId = selectedReturn._id || (await prepareReturnDoc());
+      const payload = {
+        portalUrl: GST_PORTAL_URL,
+        filedVia: 'GST_PORTAL',
+      };
+      const trimmedArn = arn.trim();
+      if (trimmedArn) payload.acknowledgementNumber = trimmedArn;
+      await api.post(`/gst/returns/${returnId}/file`, payload);
+      toast.success(
+        trimmedArn
+          ? `${selectedReturn.type} filing recorded (ARN ${trimmedArn})`
+          : `${selectedReturn.type} filing recorded`
+      );
+      closeFilingModal();
+      fetchGSTData();
+    } catch (error) {
+      console.error('File return error:', error);
+      toast.error(error.response?.data?.message || 'Failed to record filing');
+    } finally {
+      setFiling(false);
+    }
   };
 
   if (loading) {
@@ -178,9 +242,14 @@ const GSTDashboard = () => {
               onChange={(e) => setPeriod(e.target.value)}
               className="w-48"
             />
-            <Button variant="secondary" icon={Download} onClick={handleExportGSTR1}>
-              Download GSTR-1
+            <Button variant="outline" icon={ExternalLink} onClick={openGstPortal}>
+              GST Portal
             </Button>
+            {can(['admin', 'accountant']) && (
+              <Button variant="secondary" icon={Download} onClick={handleExportGSTR1}>
+                Download GSTR-1
+              </Button>
+            )}
           </div>
         }
       />
@@ -275,10 +344,16 @@ const GSTDashboard = () => {
                   Due: {formatDate(data?.currentMonth?.gstr1DueDate)}
                 </span>
               </div>
-              {data?.currentMonth?.gstr1Status !== 'filed' && (
+              {data?.currentMonth?.gstr1Status !== 'filed' && can(['admin', 'accountant']) && (
                 <Button
                   size="sm"
-                  onClick={() => openFilingModal({ period: data?.currentMonth?.period, type: 'GSTR-1' })}
+                  onClick={() =>
+                    openFilingModal({
+                      period: data?.currentMonth?.period,
+                      dueDate: data?.currentMonth?.gstr1DueDate,
+                      type: 'GSTR-1',
+                    })
+                  }
                 >
                   File Now
                 </Button>
@@ -305,10 +380,16 @@ const GSTDashboard = () => {
                   Due: {formatDate(data?.currentMonth?.gstr3bDueDate)}
                 </span>
               </div>
-              {data?.currentMonth?.gstr3bStatus !== 'filed' && (
+              {data?.currentMonth?.gstr3bStatus !== 'filed' && can(['admin', 'accountant']) && (
                 <Button
                   size="sm"
-                  onClick={() => openFilingModal({ period: data?.currentMonth?.period, type: 'GSTR-3B' })}
+                  onClick={() =>
+                    openFilingModal({
+                      period: data?.currentMonth?.period,
+                      dueDate: data?.currentMonth?.gstr3bDueDate,
+                      type: 'GSTR-3B',
+                    })
+                  }
                 >
                   File Now
                 </Button>
@@ -422,8 +503,15 @@ const GSTDashboard = () => {
             </Table.Row>
           </Table.Header>
           <Table.Body>
-            {data?.returns?.map((item, idx) => (
-              <Table.Row key={idx}>
+            {data?.returns?.length === 0 && (
+              <Table.Row>
+                <Table.Cell colSpan={7} className="text-center text-muted-foreground py-6">
+                  No returns generated for this period yet
+                </Table.Cell>
+              </Table.Row>
+            )}
+            {data?.returns?.map((item) => (
+              <Table.Row key={item._id}>
                 <Table.Cell className="font-medium">{item.period}</Table.Cell>
                 <Table.Cell>
                   <Badge variant={item.type === 'GSTR-1' ? 'info' : 'purple'}>
@@ -433,6 +521,11 @@ const GSTDashboard = () => {
                 <Table.Cell className="text-muted-foreground">{formatDate(item.dueDate)}</Table.Cell>
                 <Table.Cell className="text-muted-foreground">
                   {item.filedDate ? formatDate(item.filedDate) : '-'}
+                  {item.acknowledgementNumber && (
+                    <div className="text-xs font-mono text-muted-foreground">
+                      ARN: {item.acknowledgementNumber}
+                    </div>
+                  )}
                 </Table.Cell>
                 <Table.Cell className="text-right font-mono">
                   {formatCurrency(item.outputTax || item.netPayable || 0)}
@@ -440,10 +533,17 @@ const GSTDashboard = () => {
                 <Table.Cell>{getStatusBadge(item.status)}</Table.Cell>
                 <Table.Cell>
                   {item.status === 'filed' ? (
-                    <Button variant="ghost" size="sm" icon={ExternalLink}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={ExternalLink}
+                      onClick={() =>
+                        window.open(item.portalUrl || GST_PORTAL_URL, '_blank', 'noopener,noreferrer')
+                      }
+                    >
                       View
                     </Button>
-                  ) : (
+                  ) : can(['admin', 'accountant']) && (
                     <Button size="sm" onClick={() => openFilingModal(item)}>
                       File
                     </Button>
@@ -458,17 +558,18 @@ const GSTDashboard = () => {
       {/* Filing Modal */}
       <Modal
         isOpen={showFilingModal}
-        onClose={() => setShowFilingModal(false)}
+        onClose={closeFilingModal}
         title={`File ${selectedReturn?.type}`}
       >
         <div className="space-y-4">
           <div className="p-4 bg-blue-50 rounded-lg">
             <p className="text-sm text-blue-800">
-              You are about to file <strong>{selectedReturn?.type}</strong> for <strong>{selectedReturn?.period}</strong>.
-              Please ensure all invoices are entered correctly before proceeding.
+              Filing happens in three steps: download the packet prepared from your books,
+              file <strong>{selectedReturn?.type}</strong> for <strong>{selectedReturn?.period}</strong>{' '}
+              on the official GST portal, then record the filing here so Artha keeps the report.
             </p>
           </div>
-          
+
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Return Type:</span>
@@ -484,12 +585,44 @@ const GSTDashboard = () => {
             </div>
           </div>
 
-          <div className="flex justify-end gap-3 pt-4">
-            <Button variant="secondary" onClick={() => setShowFilingModal(false)}>
+          <div className="space-y-1.5">
+            <label htmlFor="gst-arn" className="text-sm font-medium text-foreground">
+              Portal Acknowledgement Number (ARN)
+            </label>
+            <input
+              id="gst-arn"
+              type="text"
+              value={arn}
+              onChange={(e) => setArn(e.target.value)}
+              placeholder="e.g. AA07092512345FZ — optional, shown on the portal after filing"
+              className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            <p className="text-xs text-muted-foreground">
+              Saving records the filing outcome against this return; it does not file on your behalf.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-3 pt-4">
+            <Button
+              variant="outline"
+              icon={Download}
+              onClick={() => exportFilingPacket(packetTypeFor(selectedReturn?.type))}
+            >
+              Download Filing Packet
+            </Button>
+            <Button variant="secondary" icon={ExternalLink} onClick={handleFileOnPortal}>
+              Download &amp; Open Portal
+            </Button>
+            <Button variant="ghost" onClick={closeFilingModal}>
               Cancel
             </Button>
-            <Button onClick={handleFileReturn} loading={filing}>
-              Confirm & File
+            <Button
+              onClick={handleSaveFiling}
+              loading={filing || preparing}
+              disabled={preparing}
+              icon={CheckCircle}
+            >
+              Save Filing Record
             </Button>
           </div>
         </div>

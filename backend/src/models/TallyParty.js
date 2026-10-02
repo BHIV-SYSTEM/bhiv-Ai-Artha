@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
+import companyScope from '../utils/companyScope.js';
 
 /**
  * TallyParty — snapshot of a Tally party/ledger (dealer) pulled from the
@@ -60,6 +61,11 @@ const tallyPartySchema = new mongoose.Schema({
   timestamps: true,
 });
 
-tallyPartySchema.index({ tenantId: 1, company: 1, ledgerName: 1 }, { unique: true });
+tallyPartySchema.index({ companyId: 1, tenantId: 1, company: 1, ledgerName: 1 }, { unique: true });
+
+tallyPartySchema.add({
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
+});
+tallyPartySchema.plugin(companyScope);
 
 export default mongoose.model('TallyParty', tallyPartySchema);

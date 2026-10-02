@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
+import companyScope from '../utils/companyScope.js';
 
 const validateDecimal = {
   validator: (v) => v === '' || v === null || v === undefined || (!isNaN(Number(v)) && isFinite(Number(v))),
@@ -79,5 +80,7 @@ const reconcileRecordSchema = new mongoose.Schema({
 reconcileRecordSchema.index({ reconcileType: 1, companyId: 1 });
 reconcileRecordSchema.index({ status: 1, createdAt: -1 });
 reconcileRecordSchema.index({ 'period.financialYear': 1, 'period.quarter': 1 });
+
+reconcileRecordSchema.plugin(companyScope);
 
 export default mongoose.model('ReconcileRecord', reconcileRecordSchema);

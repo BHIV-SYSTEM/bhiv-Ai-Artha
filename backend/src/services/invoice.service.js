@@ -1,8 +1,7 @@
 import Decimal from 'decimal.js';
-import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
 import Invoice from '../models/Invoice.js';
-import CompanySettings from '../models/CompanySettings.js';
+import companySettingsService from './companySettings.service.js';
 import ledgerService from './ledger.service.js';
 import ChartOfAccounts from '../models/ChartOfAccounts.js';
 import logger from '../config/logger.js';
@@ -12,6 +11,8 @@ import auditService from './audit.service.js';
 import evidenceAutomationService from './evidenceAutomation.service.js';
 import tantraService from './tantra.service.js';
 import notificationEvent from './notificationEvent.service.js';
+import recipientVerification from './recipientVerification.service.js';
+import { getScope } from '../utils/companyScope.js';
 
 class InvoiceService {
   /**
@@ -342,7 +343,24 @@ class InvoiceService {
       if (invoice.status !== 'draft') {
         throw new Error('Only draft invoices can be sent');
       }
-      
+
+      const verification = await recipientVerification.verify({
+        customerEmail: invoice.customerEmail,
+        customerGSTIN: invoice.customerGSTIN,
+      });
+
+      if (!verification.verified) {
+        const error = new Error('Recipient details could not be verified. Invoice email and GSTIN must both match the same ARTHA account.');
+        error.code = 'RECIPIENT_NOT_VERIFIED';
+        error.details = {
+          emailMatched: verification.emailMatched,
+          gstMatched: verification.gstMatched,
+          customerEmail: verification.customerEmail,
+          customerGSTIN: verification.customerGSTIN,
+        };
+        throw error;
+      }
+
       // Create journal entry to record AR
       let arAccount = await ChartOfAccounts.findOne({ code: '1100' }).session(session);
       let revenueAccount = await ChartOfAccounts.findOne({ code: '4000' }).session(session);
@@ -357,7 +375,7 @@ class InvoiceService {
         revenueAccount = (await ChartOfAccounts.create([{ code: '4000', name: 'Sales Revenue', type: 'Income', subtype: 'Operating Revenue', normalBalance: 'credit' }], { session }))[0];
       }
 
-      const settings = await CompanySettings.findById('company_settings').session(session);
+      const settings = await companySettingsService.getSettings({ session });
       const companyState = settings?.address?.state || (settings?.gstin ? settings.gstin.substring(0, 2) : null);
 
       if (!companyState) {
@@ -598,6 +616,7 @@ class InvoiceService {
       logger.info(`Invoice sent: ${invoice.invoiceNumber}`);
 
       notificationEvent.invoiceSent(invoice).catch(() => {});
+      notificationEvent.deliverInvoiceToAccounts(invoice).catch(() => {});
 
       return invoice;
     });
@@ -843,6 +862,64 @@ class InvoiceService {
     await cacheService.cacheInvoiceStats(dateFrom, dateTo, summary);
     
     return summary;
+  }
+
+  async _readUnscoped(fn) {
+    const store = getScope();
+    const prev = store ? store.crossCompany : null;
+    if (store) store.crossCompany = true;
+    try {
+      return await fn();
+    } finally {
+      if (store) store.crossCompany = prev;
+    }
+  }
+
+  async _requesterGstins() {
+    try {
+      const settings = await companySettingsService.getSettings();
+      return [settings?.gstin, ...((settings?.gstinRegistrations || []).map((r) => r?.gstin))]
+        .filter(Boolean)
+        .map((g) => String(g).trim().toUpperCase());
+    } catch (err) {
+      return [];
+    }
+  }
+
+  async _isSharedWith(invoice, user) {
+    const email = String(user?.email || '').trim().toLowerCase();
+    const custEmail = String(invoice.customerEmail || '').trim().toLowerCase();
+    if (email && custEmail && email === custEmail) return true;
+    const gstin = String(invoice.customerGSTIN || '').trim().toUpperCase();
+    if (gstin) {
+      const mine = await this._requesterGstins();
+      if (mine.includes(gstin)) return true;
+    }
+    return false;
+  }
+
+  async getSharedInvoice(invoiceId, user) {
+    const invoice = await this._readUnscoped(() => Invoice.findById(invoiceId).lean());
+    if (!invoice || !(await this._isSharedWith(invoice, user))) return null;
+    return invoice;
+  }
+
+  async getSharedInvoices(user) {
+    const or = [];
+    const email = String(user?.email || '').trim().toLowerCase();
+    if (email) or.push({ customerEmail: email });
+    const gstins = await this._requesterGstins();
+    if (gstins.length) {
+      const escaped = gstins.map((g) => g.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      or.push({ customerGSTIN: { $in: escaped.map((e) => new RegExp(`^${e}$`, 'i')) } });
+    }
+    if (!or.length) return [];
+    const workspace = getScope()?.workspace;
+    const filter = { $or: or };
+    if (workspace) filter.companyId = { $ne: workspace };
+    return this._readUnscoped(() =>
+      Invoice.find(filter).sort({ createdAt: -1 }).limit(50).lean(),
+    );
   }
 }
 

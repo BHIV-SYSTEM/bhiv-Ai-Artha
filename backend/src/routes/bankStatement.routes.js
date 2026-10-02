@@ -2,6 +2,7 @@ import express from 'express';
 import { protect, authorize } from '../middleware/auth.js';
 import { uploadFile, handleUploadError } from '../middleware/upload.js';
 import {
+  extractBankStatementDetails,
   uploadBankStatement,
   getBankStatements,
   getBankStatement,
@@ -14,6 +15,14 @@ import {
 const router = express.Router();
 
 router.use(protect);
+
+router.post(
+  '/extract',
+  authorize('admin', 'accountant'),
+  uploadFile.single('statement'),
+  handleUploadError,
+  extractBankStatementDetails
+);
 
 router.post(
   '/upload',

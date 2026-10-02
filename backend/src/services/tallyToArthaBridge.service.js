@@ -3,7 +3,6 @@ import Invoice from '../models/Invoice.js';
 import Expense from '../models/Expense.js';
 import ChartOfAccounts from '../models/ChartOfAccounts.js';
 import TallyVoucher from '../models/TallyVoucher.js';
-import Counter from '../models/Counter.js';
 import ledgerService from './ledger.service.js';
 import logger from '../config/logger.js';
 import notificationEvent from './notificationEvent.service.js';
@@ -30,6 +29,25 @@ function parseAmount(val) {
 
 function formatAmount(n) {
   return String(Math.abs(Math.round(n * 100) / 100));
+}
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Resolve a Tally ledger name to a ChartOfAccounts record (case-insensitive
+ * exact match). Falls back to the caller's default account so journal
+ * vouchers still import when the ledger isn't in the COA yet.
+ */
+async function resolveLedgerAccount(ledgerName, fallback) {
+  const name = String(ledgerName || '').trim();
+  if (!name) return fallback;
+  const match = await ChartOfAccounts.findOne({
+    name: { $regex: `^${escapeRegex(name)}$`, $options: 'i' },
+    isActive: true,
+  });
+  return match || fallback;
 }
 
 function buildBridgeProvenance(voucher, _tenantId, _company) {
@@ -296,15 +314,18 @@ async function importJournalVoucher(voucher, tenantId, company) {
 
   if (!defaultAccount) return { imported: false, reason: 'missing-accounts' };
 
-  const lines = entries.slice(0, 10).map((e) => {
+  const lines = [];
+  for (const e of entries.slice(0, 10)) {
     const entryAmount = parseAmount(e.amount);
-    return {
-      account: defaultAccount._id,
+    if (entryAmount === 0) continue;
+    const account = await resolveLedgerAccount(e.ledgerName, defaultAccount);
+    lines.push({
+      account: account._id,
       debit: entryAmount > 0 ? formatAmount(entryAmount) : '0',
       credit: entryAmount < 0 ? formatAmount(-entryAmount) : '0',
       description: e.ledgerName || '',
-    };
-  });
+    });
+  }
 
   // Ensure at least 2 lines
   if (lines.length < 2) return { imported: false, reason: 'insufficient-entries' };

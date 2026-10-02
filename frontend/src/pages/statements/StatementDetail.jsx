@@ -4,10 +4,12 @@ import { CheckCircle, XCircle, Clock, ArrowUpRight, ArrowDownRight, FileText, Do
 import toast from 'react-hot-toast';
 import { bankStatementService } from '../../services';
 import { PageHeader, Card, Button } from '../../components/common';
+import { useCan } from '../../utils/permissions';
 
 const StatementDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const can = useCan();
   const [statement, setStatement] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedTransactions, setSelectedTransactions] = useState([]);
@@ -139,15 +141,17 @@ const StatementDetail = () => {
             <Button variant="outline" onClick={() => navigate('/statements')}>
               Back to Statements
             </Button>
-            <Button
-              variant="outline"
-              onClick={handleDeleteStatement}
-              className="text-red-600 border-red-200 hover:bg-red-50"
-            >
-              <Trash2 className="w-4 h-4 mr-2" />
-              Delete Permanently
-            </Button>
-            {statement.status === 'completed' && (
+            {can(['admin']) && (
+              <Button
+                variant="outline"
+                onClick={handleDeleteStatement}
+                className="text-red-600 border-red-200 hover:bg-red-50"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete Permanently
+              </Button>
+            )}
+            {statement.status === 'completed' && can(['admin', 'accountant']) && (
               <>
                 <Button variant="outline" onClick={handleMatchTransactions}>
                   <CheckCircle className="w-4 h-4 mr-2" />

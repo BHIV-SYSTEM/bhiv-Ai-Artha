@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
+import companyScope from '../utils/companyScope.js';
 
 const tallyExportSchema = new mongoose.Schema({
   exportId: {
@@ -66,5 +67,7 @@ const tallyExportSchema = new mongoose.Schema({
 
 tallyExportSchema.index({ companyId: 1, exportType: 1 });
 tallyExportSchema.index({ status: 1, createdAt: -1 });
+
+tallyExportSchema.plugin(companyScope);
 
 export default mongoose.model('TallyExport', tallyExportSchema);

@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
+import './Counter.js';
 import Decimal from 'decimal.js';
+import companyScope from '../utils/companyScope.js';
 
 // Decimal validation helper
 const validateDecimal = {
@@ -195,5 +197,15 @@ bankStatementSchema.pre('save', async function(next) {
   }
   next();
 });
+
+bankStatementSchema.add({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
+});
+bankStatementSchema.plugin(companyScope);
 
 export default mongoose.model('BankStatement', bankStatementSchema);

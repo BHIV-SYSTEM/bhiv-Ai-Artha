@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
+import companyScope from '../utils/companyScope.js';
 
 /**
  * TallyVoucher — read-only snapshot of Tally vouchers (sales/receipts/payments
@@ -64,6 +65,11 @@ const tallyVoucherSchema = new mongoose.Schema({
 });
 
 tallyVoucherSchema.index({ tenantId: 1, partyName: 1, date: -1 });
-tallyVoucherSchema.index({ tenantId: 1, voucherNumber: 1, date: 1 }, { unique: true });
+tallyVoucherSchema.index({ companyId: 1, tenantId: 1, voucherNumber: 1, date: 1 }, { unique: true });
+
+tallyVoucherSchema.add({
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
+});
+tallyVoucherSchema.plugin(companyScope);
 
 export default mongoose.model('TallyVoucher', tallyVoucherSchema);

@@ -27,10 +27,18 @@ import {
 } from '../../components/common';
 import api from '../../services/api';
 import { formatDate } from '../../utils/formatters';
+import { useAuthStore } from '../../store/authStore';
 
 const UserManagement = () => {
+  const { user: currentUser } = useAuthStore();
+  const isSuperAdmin = currentUser?.role === 'admin';
+  const isSubAdmin = currentUser?.role === 'sub_admin';
+
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [newCompanyName, setNewCompanyName] = useState('');
+  const [creatingCompany, setCreatingCompany] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -46,10 +54,12 @@ const UserManagement = () => {
     department: '',
     password: '',
     status: 'active',
+    companyId: '',
   });
 
   useEffect(() => {
     fetchUsers();
+    if (isSuperAdmin) fetchCompanies();
   }, []);
 
   const fetchUsers = async () => {
@@ -64,10 +74,43 @@ const UserManagement = () => {
     }
   };
 
+  const fetchCompanies = async () => {
+    try {
+      const response = await api.get('/multi-company/companies');
+      setCompanies(response.data.data || []);
+    } catch (error) {
+      console.error('Failed to fetch companies:', error);
+      setCompanies([]);
+    }
+  };
+
+  const handleCreateCompany = async () => {
+    const name = newCompanyName.trim();
+    if (!name) {
+      toast.error('Enter a company name first');
+      return;
+    }
+    setCreatingCompany(true);
+    try {
+      const response = await api.post('/multi-company/companies', { name });
+      const company = response.data.data;
+      await fetchCompanies();
+      if (company?._id) setFormData((prev) => ({ ...prev, companyId: company._id }));
+      setNewCompanyName('');
+      toast.success('Company created');
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to create company');
+    } finally {
+      setCreatingCompany(false);
+    }
+  };
+
   const roles = [
-    { value: 'admin', label: 'Admin', color: 'red', description: 'Full system access - manage users, settings & all data' },
-    { value: 'accountant', label: 'Accountant', color: 'blue', description: 'Create & edit invoices, expenses, journal entries' },
-    { value: 'viewer', label: 'Viewer', color: 'gray', description: 'Read-only access to view reports & data' },
+    ...(isSuperAdmin
+      ? [{ value: 'sub_admin', label: 'Admin', color: 'warning', description: 'Client company admin - manages their company & employees' }]
+      : []),
+    { value: 'accountant', label: 'Accountant', color: 'info', description: 'Create & edit invoices, expenses, journal entries' },
+    { value: 'viewer', label: 'Viewer', color: 'default', description: 'Read-only access to view reports & data' },
   ];
 
   const departments = [
@@ -80,6 +123,7 @@ const UserManagement = () => {
   ];
 
   const getRoleBadge = (role) => {
+    if (role === 'admin') return <Badge variant="gray">Super Admin</Badge>;
     const config = roles.find((r) => r.value === role);
     return <Badge variant={config?.color || 'gray'}>{config?.label || role}</Badge>;
   };
@@ -111,6 +155,7 @@ const UserManagement = () => {
         department: user.department,
         password: '',
         status: user.status,
+        companyId: user.companyId || '',
       });
     } else {
       setEditingUser(null);
@@ -121,6 +166,7 @@ const UserManagement = () => {
         department: '',
         password: '',
         status: 'active',
+        companyId: '',
       });
     }
     setShowModal(true);
@@ -139,11 +185,13 @@ const UserManagement = () => {
 
     setSaving(true);
     try {
+      const payload = { ...formData };
+      if (!payload.companyId) delete payload.companyId;
       if (editingUser) {
-        await api.put(`/users/${editingUser._id}`, formData);
+        await api.put(`/users/${editingUser._id}`, payload);
         toast.success('User updated successfully');
       } else {
-        await api.post('/users', formData);
+        await api.post('/users', payload);
         toast.success('User created successfully');
       }
       fetchUsers();
@@ -207,7 +255,7 @@ const UserManagement = () => {
         <Card className="p-4">
           <p className="text-sm text-muted-foreground">Admins</p>
           <p className="text-2xl font-bold text-red-600">
-            {users.filter((u) => u.role === 'admin').length}
+            {users.filter((u) => u.role === 'admin' || u.role === 'sub_admin').length}
           </p>
         </Card>
         <Card className="p-4">
@@ -264,6 +312,7 @@ const UserManagement = () => {
               <Table.Row>
                 <Table.Head>User</Table.Head>
                 <Table.Head>Role</Table.Head>
+                <Table.Head>Company</Table.Head>
                 <Table.Head>Department</Table.Head>
                 <Table.Head>Status</Table.Head>
                 <Table.Head>Last Login</Table.Head>
@@ -287,6 +336,9 @@ const UserManagement = () => {
                     </div>
                   </Table.Cell>
                   <Table.Cell>{getRoleBadge(user.role)}</Table.Cell>
+                  <Table.Cell className="text-muted-foreground">
+                    {user.companyName || '—'}
+                  </Table.Cell>
                   <Table.Cell className="text-muted-foreground">{user.department || '-'}</Table.Cell>
                   <Table.Cell>{getStatusBadge(user.status)}</Table.Cell>
                   <Table.Cell className="text-muted-foreground">
@@ -371,6 +423,36 @@ const UserManagement = () => {
               onChange={(e) => setFormData({ ...formData, department: e.target.value })}
             />
           </div>
+          {isSuperAdmin && (
+            <div>
+              <Select
+                label="Company (leave empty for a personal, empty workspace)"
+                options={companies.map((c) => ({ value: c._id, label: c.name }))}
+                value={formData.companyId}
+                onChange={(e) => setFormData({ ...formData, companyId: e.target.value })}
+              />
+              <div className="flex gap-2 mt-2">
+                <Input
+                  placeholder="New company name…"
+                  value={newCompanyName}
+                  onChange={(e) => setNewCompanyName(e.target.value)}
+                />
+                <Button
+                  variant="secondary"
+                  onClick={handleCreateCompany}
+                  loading={creatingCompany}
+                  type="button"
+                >
+                  Create Company
+                </Button>
+              </div>
+            </div>
+          )}
+          {isSubAdmin && (
+            <p className="text-sm text-muted-foreground">
+              New members join your company automatically.
+            </p>
+          )}
           <Input
             label={editingUser ? 'New Password (leave blank to keep current)' : 'Password'}
             type="password"

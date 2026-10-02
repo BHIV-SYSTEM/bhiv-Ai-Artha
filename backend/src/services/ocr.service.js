@@ -104,7 +104,11 @@ class OCRService {
   async _extractFromImage(filePath) {
     try {
       const Tesseract = await import('tesseract.js');
-      const { data: { text, confidence } } = await Tesseract.recognize(filePath, 'eng');
+      // Language data host is configurable: the default jsdelivr CDN is not
+      // reachable from all networks, projectnaptha's tessdata mirror is.
+      const { data: { text, confidence } } = await Tesseract.recognize(filePath, 'eng', {
+        langPath: process.env.TESSERACT_LANG_PATH || 'https://tessdata.projectnaptha.com/4.0.0',
+      });
       logger.info(`Tesseract OCR: ${text.length} chars, confidence=${confidence}`);
       return { text, pages: 1, info: {}, ocrConfidence: confidence };
     } catch (err) {
@@ -114,21 +118,50 @@ class OCRService {
   }
 
   parseText(rawText) {
+    const vendor = this._extractVendor(rawText);
+    const date = this._extractDate(rawText);
+    const invoiceNumber = this._extractInvoiceNumber(rawText);
+    const taxAmount = this._extractTax(rawText);
+    const grossAmount = this._extractAmount(rawText);
+    const gstRate = this._extractGstRate(rawText);
+    const gstin = this._extractGSTIN(rawText);
+    const supplierState = this._deriveSupplierState(gstin);
+
+    // `amount` is the TAXABLE (pre-tax) value: the ledger treats amount as the
+    // base and recomputes GST as amount * gstRate. If the receipt only shows a
+    // grand total, subtract the tax so we never double-count it.
+    const tax = parseFloat(taxAmount) || 0;
+    const gross = parseFloat(grossAmount) || 0;
+    const taxableBase = this._extractTaxableBase(rawText);
+    let amount = gross;
+    if (taxableBase !== null) {
+      amount = taxableBase;
+    } else if (tax > 0 && gross > tax) {
+      amount = gross - tax;
+    }
+
+    const fields = {
+      vendor,
+      amount: amount.toFixed(2),
+      date,
+      invoiceNumber,
+      taxAmount,
+    };
+
     return {
-      vendor: this._extractVendor(rawText),
-      date: this._extractDate(rawText),
-      amount: this._extractAmount(rawText),
-      taxAmount: this._extractTax(rawText),
-      invoiceNumber: this._extractInvoiceNumber(rawText),
+      vendor,
+      date,
+      amount: amount.toFixed(2),
+      totalAmount: gross > 0 ? gross.toFixed(2) : amount.toFixed(2),
+      taxAmount,
+      gstAmount: taxAmount,
+      gstRate,
+      gstin,
+      supplierState,
+      invoiceNumber,
       items: this._extractLineItems(rawText),
       description: rawText.trim().substring(0, 300),
-      confidence: this._calcConfidence(rawText, {
-        vendor: this._extractVendor(rawText),
-        amount: this._extractAmount(rawText),
-        date: this._extractDate(rawText),
-        invoiceNumber: this._extractInvoiceNumber(rawText),
-        taxAmount: this._extractTax(rawText),
-      }),
+      confidence: this._calcConfidence(rawText, fields),
     };
   }
 
@@ -217,23 +250,76 @@ class OCRService {
 
   _extractDate(text) {
     const patterns = [
-      /(?:date|invoice date|bill date|dated|dt)[\s.:]*(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
-      /(?:date|invoice date|bill date|dated|dt)[\s.:]*(\d{4}[\/-]\d{1,2}[\/-]\d{1,2})/i,
+      /(?:date|invoice date|bill date|dated|dt)[\s.:]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})/i,
+      /(?:date|invoice date|bill date|dated|dt)[\s.:]*(\d{4}[/-]\d{1,2}[/-]\d{1,2})/i,
       /(?:date|invoice date|bill date|dated|dt)[\s.:]*(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s,]*\d{2,4})/i,
-      /(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/,
-      /(\d{4}[\/-]\d{1,2}[\/-]\d{1,2})/,
+      /(\d{4}[/-]\d{1,2}[/-]\d{1,2})/,
+      /(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})/,
       /(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s,]*\d{2,4})/i,
     ];
     for (const p of patterns) {
       const m = text.match(p);
       if (m?.[1]) {
-        try {
-          const d = new Date(m[1]);
-          if (!isNaN(d) && d.getFullYear() > 2000 && d.getFullYear() < 2100) return d.toISOString().split('T')[0];
-        } catch {}
+        const d = this._toDate(m[1]);
+        if (d) return d;
       }
     }
-    return new Date().toISOString().split('T')[0];
+    return this._formatLocalDate(new Date());
+  }
+
+  /**
+   * Parse a date string to YYYY-MM-DD. Handles ISO, day-first/month-first
+   * numeric (Indian receipts are day-first), and month-name formats —
+   * `new Date('15/08/2024')` is Invalid Date in JS, so never rely on it.
+   */
+  _formatLocalDate(date) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  }
+
+  _toDate(value) {
+    const s = String(value).trim();
+    const valid = (y, m, d) => {
+      const date = new Date(y, m - 1, d);
+      if (isNaN(date.getTime())) return null;
+      if (date.getFullYear() < 2000 || date.getFullYear() > 2100) return null;
+      if (date.getMonth() !== m - 1 || date.getDate() !== d) return null;
+      return this._formatLocalDate(date);
+    };
+
+    let m = s.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+    if (m) return valid(+m[1], +m[2], +m[3]);
+
+    m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
+    if (m) {
+      const a = +m[1];
+      const b = +m[2];
+      let year = +m[3];
+      if (year < 100) year += 2000;
+      let day;
+      let month;
+      if (a > 12) {
+        day = a;
+        month = b;
+      } else if (b > 12) {
+        day = b;
+        month = a;
+      } else {
+        day = a; // ambiguous → day-first (Indian receipts)
+        month = b;
+      }
+      return valid(year, month, day);
+    }
+
+    m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{2,4})$/);
+    if (m) {
+      const months = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+      const month = months[m[2].toLowerCase().slice(0, 3)];
+      let year = +m[3];
+      if (year < 100) year += 2000;
+      if (month) return valid(year, month, +m[1]);
+    }
+    return null;
   }
 
   _extractAmount(text) {
@@ -259,21 +345,107 @@ class OCRService {
   }
 
   _extractTax(text) {
-    let total = 0;
-    for (const line of text.split('\n')) {
-      if (/cgst|sgst|igst|gst|tax|vat/i.test(line)) {
-        const m = line.match(/(?:rs\.?|₹|inr)\s*([0-9,]+\.\d{2})/i) || line.match(/([0-9,]+\.\d{2})\s*$/);
-        if (m?.[1]) {
-          const val = parseFloat(m[1].replace(/,/g, ''));
-          if (!isNaN(val) && val > 0) total += val;
+    const lines = String(text).split('\n');
+    const amountOn = (line) => {
+      // last money-looking number that is not a percentage
+      const matches = [...line.matchAll(/(?:rs\.?|₹|inr)?\s*([0-9,]+\.\d{2})(?!\s*%)/gi)];
+      if (!matches.length) return null;
+      const val = parseFloat(matches[matches.length - 1][1].replace(/,/g, ''));
+      return Number.isFinite(val) && val > 0 ? val : null;
+    };
+
+    // Prefer explicit CGST/SGST/IGST component lines (never double-count
+    // a "Total Tax" line alongside them)
+    let componentSum = 0;
+    let componentFound = false;
+    for (const line of lines) {
+      if (/taxable|tax\s*(?:rate|exclusive|inclusive)/i.test(line)) continue;
+      if (/\b(cgst|sgst|igst)\b/i.test(line)) {
+        const val = amountOn(line);
+        if (val !== null) {
+          componentSum += val;
+          componentFound = true;
         }
       }
     }
-    if (total === 0) {
-      const m = text.match(/(?:tax\s*amount|gst\s*amount|total\s*tax)[\s:]*(?:rs\.?|₹|inr)?\s*([0-9,]+\.?\d{0,2})/i);
-      if (m?.[1]) { const v = parseFloat(m[1].replace(/,/g, '')); if (!isNaN(v) && v > 0) total = v; }
+    if (componentFound && componentSum > 0) return componentSum.toFixed(2);
+
+    // Explicit tax total
+    const totalMatch = text.match(/(?:tax\s*amount|gst\s*amount|total\s*tax|vat\s*amount)[\s:]*(?:rs\.?|₹|inr)?\s*([0-9,]+\.?\d{0,2})/i);
+    if (totalMatch?.[1]) {
+      const v = parseFloat(totalMatch[1].replace(/,/g, ''));
+      if (Number.isFinite(v) && v > 0) return v.toFixed(2);
+    }
+
+    // Last resort: GST/VAT lines with a trailing amount
+    let total = 0;
+    for (const line of lines) {
+      if (/taxable/i.test(line)) continue;
+      if (/\b(gst|vat)\b/i.test(line)) {
+        const val = amountOn(line);
+        if (val !== null) total += val;
+      }
     }
     return total.toFixed(2);
+  }
+
+  /** Pre-tax value printed on the receipt, if any ("Taxable Value", "Sub Total"). */
+  _extractTaxableBase(text) {
+    const patterns = [
+      /(?:taxable\s*(?:value|amount)|net\s*amount|sub\s*total|subtotal|amount\s*before\s*tax)[\s:]*(?:rs\.?|₹|inr)?\s*([0-9,]+\.?\d{0,2})/i,
+    ];
+    for (const p of patterns) {
+      const m = text.match(p);
+      if (m?.[1]) {
+        const val = parseFloat(m[1].replace(/,/g, ''));
+        if (!isNaN(val) && val > 0) return val;
+      }
+    }
+    return null;
+  }
+
+  /** GST rate printed on the receipt, snapped to a statutory slab (0/5/12/18/28). */
+  _extractGstRate(text) {
+    const ALLOWED = [0, 5, 12, 18, 28];
+    const candidates = [];
+    const igst = text.match(/igst\s*(?:@|:|rate)?\s*([\d.]+)\s*%/i);
+    if (igst) candidates.push(parseFloat(igst[1]));
+    const cgst = text.match(/cgst\s*(?:@|:|rate)?\s*([\d.]+)\s*%/i);
+    const sgst = text.match(/sgst\s*(?:@|:|rate)?\s*([\d.]+)\s*%/i);
+    if (cgst && sgst) candidates.push(parseFloat(cgst[1]) + parseFloat(sgst[1]));
+    for (const m of text.matchAll(/(?:gst|tax)\s*(?:rate)?\s*(?:@|:|=|\()?\s*([\d.]+)\s*%/gi)) {
+      candidates.push(parseFloat(m[1]));
+    }
+    for (const m of text.matchAll(/@\s*([\d.]+)\s*%/g)) {
+      candidates.push(parseFloat(m[1]));
+    }
+    for (const rate of candidates) {
+      if (!Number.isFinite(rate)) continue;
+      const match = ALLOWED.find(a => Math.abs(a - rate) <= 0.6);
+      if (match !== undefined) return match;
+    }
+    return null;
+  }
+
+  _extractGSTIN(text) {
+    const m = String(text).toUpperCase().match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]\b/);
+    return m ? m[0] : null;
+  }
+
+  /** Map a GSTIN's 2-digit state code to the supplier-state enum the app uses. */
+  _deriveSupplierState(gstin) {
+    if (!gstin) return null;
+    const CODE_TO_STATE = {
+      '01': 'OTHER', '02': 'OTHER', '03': 'PUNJAB', '04': 'OTHER', '05': 'OTHER',
+      '06': 'OTHER', '07': 'DELHI', '08': 'RAJASTHAN', '09': 'UTTAR_PRADESH',
+      '10': 'BIHAR', '11': 'OTHER', '12': 'OTHER', '13': 'OTHER', '14': 'OTHER',
+      '15': 'OTHER', '16': 'OTHER', '17': 'OTHER', '18': 'ASSAM', '19': 'WEST_BENGAL',
+      '20': 'JHARKHAND', '21': 'ODISHA', '22': 'CHHATTISGARH', '23': 'MADHYA_PRADESH',
+      '24': 'GUJARAT', '26': 'OTHER', '27': 'MAHARASHTRA', '29': 'KARNATAKA',
+      '30': 'GOA', '31': 'OTHER', '32': 'KERALA', '33': 'TAMIL_NADU', '34': 'OTHER',
+      '35': 'OTHER', '36': 'TELANGANA', '37': 'ANDHRA_PRADESH', '38': 'OTHER',
+    };
+    return CODE_TO_STATE[gstin.substring(0, 2)] || null;
   }
 
   _extractInvoiceNumber(text) {

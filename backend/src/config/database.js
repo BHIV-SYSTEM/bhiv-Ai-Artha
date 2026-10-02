@@ -3,56 +3,76 @@ import logger from './logger.js';
 
 // Global flag to track transaction availability
 let transactionsAvailable = false;
+let listenersBound = false;
+let retryTimer = null;
 
-const connectDB = async () => {
+const bindConnectionListeners = () => {
+  if (listenersBound) return;
+  listenersBound = true;
+
+  mongoose.connection.on('disconnected', () => {
+    transactionsAvailable = false;
+    logger.warn('MongoDB disconnected - transactions disabled');
+  });
+
+  mongoose.connection.on('connected', async () => {
+    try {
+      await mongoose.connection.db.admin().command({ replSetGetStatus: 1 });
+      transactionsAvailable = true;
+      logger.info('MongoDB reconnected - transactions enabled');
+    } catch {
+      transactionsAvailable = false;
+      logger.warn('MongoDB reconnected - transactions disabled (no replica set)');
+    }
+  });
+};
+
+const checkReplicaSet = async () => {
   try {
-    const mongoURI = process.env.NODE_ENV === 'test' 
-      ? process.env.MONGODB_TEST_URI 
-      : process.env.MONGODB_URI;
+    await mongoose.connection.db.admin().command({ replSetGetStatus: 1 });
+    transactionsAvailable = true;
+    logger.info('Replica set detected - transactions enabled');
+  } catch (error) {
+    transactionsAvailable = false;
+    logger.warn('Not running as replica set - transactions disabled');
+    if (process.env.NODE_ENV === 'production') {
+      logger.error('Production environment requires MongoDB replica set for transactions');
+      logger.error('Please configure MongoDB as a replica set or use MongoDB Atlas');
+    }
+  }
+};
 
+const scheduleRetry = (attempt, message) => {
+  const delay = Math.min(30000, 1000 * 2 ** Math.min(attempt, 5));
+  logger.error(`Database connection failed (attempt ${attempt}): ${message}. Retrying in ${Math.round(delay / 1000)}s...`);
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    connectDB(attempt + 1);
+  }, delay);
+  if (retryTimer.unref) retryTimer.unref();
+};
+
+const connectDB = async (attempt = 1) => {
+  const mongoURI = process.env.NODE_ENV === 'test'
+    ? process.env.MONGODB_TEST_URI
+    : process.env.MONGODB_URI;
+
+  try {
     const options = {
       serverSelectionTimeoutMS: 5000,
       socketTimeoutMS: 45000,
     };
 
     await mongoose.connect(mongoURI, options);
-    
+
     logger.info(`MongoDB Connected: ${mongoose.connection.host}`);
-
-    mongoose.connection.on('disconnected', () => {
-      transactionsAvailable = false;
-      logger.warn('MongoDB disconnected - transactions disabled');
-    });
-
-    mongoose.connection.on('connected', async () => {
-      try {
-        await mongoose.connection.db.admin().command({ replSetGetStatus: 1 });
-        transactionsAvailable = true;
-        logger.info('MongoDB reconnected - transactions enabled');
-      } catch {
-        transactionsAvailable = false;
-        logger.warn('MongoDB reconnected - transactions disabled (no replica set)');
-      }
-    });
-    
-    // Check for replica set and transaction support
-    try {
-      await mongoose.connection.db.admin().command({ replSetGetStatus: 1 });
-      transactionsAvailable = true;
-      logger.info('✅ Replica set detected - transactions enabled');
-    } catch (error) {
-      transactionsAvailable = false;
-      logger.warn('⚠️  Not running as replica set - transactions disabled');
-      
-      if (process.env.NODE_ENV === 'production') {
-        logger.error('❌ Production environment requires MongoDB replica set for transactions');
-        logger.error('Please configure MongoDB as a replica set or use MongoDB Atlas');
-        // Don't exit in production, but log critical warning
-      }
-    }
+    bindConnectionListeners();
+    await checkReplicaSet();
   } catch (error) {
-    logger.error(`Database connection error: ${error.message}`);
-    process.exit(1);
+    // Never exit: a transient DNS/network failure to Atlas must not kill the
+    // server (that produced crash/restart loops). Keep retrying with backoff.
+    scheduleRetry(attempt, error.message);
   }
 };
 
@@ -65,7 +85,7 @@ export const withTransaction = async (callback) => {
     logger.warn('Transactions not available - executing without transaction');
     return await callback(null);
   }
-  
+
   const session = await mongoose.startSession();
   try {
     session.startTransaction();

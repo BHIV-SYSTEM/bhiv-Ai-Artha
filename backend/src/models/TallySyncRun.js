@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
+import companyScope from '../utils/companyScope.js';
 
 /**
  * TallySyncRun — provenance/evidence record for each connector sync run.
@@ -49,5 +50,10 @@ const tallySyncRunSchema = new mongoose.Schema({
 });
 
 tallySyncRunSchema.index({ tenantId: 1, status: 1, startedAt: -1 });
+
+tallySyncRunSchema.add({
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
+});
+tallySyncRunSchema.plugin(companyScope);
 
 export default mongoose.model('TallySyncRun', tallySyncRunSchema);

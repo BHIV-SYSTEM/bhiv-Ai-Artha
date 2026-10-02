@@ -47,12 +47,22 @@ class MultiCompanyService {
     }
   }
 
-  // Get all companies
-  async getCompanies(filters = {}, userId = null) {
+  // Get companies visible to a user. Super admin sees every company they
+  // created; everyone else only sees companies they own or belong to.
+  async getCompanies(filters = {}, user = null) {
     const query = {};
     if (filters.status) query.status = filters.status;
     if (filters.parentCompany) query.parentCompany = filters.parentCompany;
-    if (userId) query.owners = userId;
+    if (user) {
+      if (user.role === 'admin') {
+        query.owners = user._id;
+      } else {
+        query.$or = [
+          { owners: user._id },
+          { _id: user.companyId || user._id },
+        ];
+      }
+    }
 
     return Company.find(query).sort({ name: 1 });
   }

@@ -182,7 +182,7 @@ async function seed() {
           address: `${agent.area}, ${DEFAULT_CITY}`,
           nearbyDealer: nearestDealer._id,
           isAtDealer: j < 2,
-          source: 'niyantran-app',
+          source: 'manual',
           createdAt: new Date(now - timeAgo),
         });
       }
@@ -250,10 +250,10 @@ async function seed() {
     // Create notifications
     const notifMessages = [
       { title: 'Payment Received', body: `${DEMO_DEALERS[0].name} paid Rs 50,000`, type: 'payment', category: 'finance' },
-      { title: 'Visit Completed', body: `${DEMO_AGENTS[0].name} completed visit to ${DEMO_DEALERS[1].name}`, type: 'visit', category: 'niyantran' },
+      { title: 'Visit Completed', body: `${DEMO_AGENTS[0].name} completed visit to ${DEMO_DEALERS[1].name}`, type: 'visit', category: 'system' },
       { title: 'Overdue Alert', body: `${DEMO_DEALERS[4].name} - Rs 2,00,000 overdue by 15 days`, type: 'overdue', category: 'crm' },
       { title: 'New Order', body: `${DEMO_DEALERS[2].name} placed order for Rs 75,000`, type: 'info', category: 'crm' },
-      { title: 'Agent Check-in', body: `${DEMO_AGENTS[1].name} checked in at ${DEMO_DEALERS[3].area}`, type: 'location', category: 'niyantran' },
+      { title: 'Agent Check-in', body: `${DEMO_AGENTS[1].name} checked in at ${DEMO_DEALERS[3].area}`, type: 'location', category: 'system' },
     ];
     for (let i = 0; i < notifMessages.length; i++) {
       await Notification.create({

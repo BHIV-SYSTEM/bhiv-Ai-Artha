@@ -820,6 +820,28 @@
   50% { filter: hue-rotate(15deg); }
 }
 
+/* Water-fill submit button wave (ProgressSubmitButton) */
+@keyframes waterWaveMove {
+  from { background-position: 0 0; }
+  to { background-position: 40px 0; }
+}
+
+.water-wave {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -5px;
+  height: 10px;
+  background-image: radial-gradient(
+    circle at 20px 10px,
+    rgba(255, 255, 255, 0.45) 9px,
+    rgba(255, 255, 255, 0) 10px
+  );
+  background-size: 40px 10px;
+  background-repeat: repeat-x;
+  animation: waterWaveMove 1.5s linear infinite;
+}
+
 /* ============================================
    SCROLLBAR STYLING
    ============================================ */

@@ -15,13 +15,15 @@ import {
   CheckCheck,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
+import { useCan } from '../../utils/permissions';
 import { notificationService } from '../../services/index';
 import { ThemeDropdown } from '../common/ThemeToggle';
 import clsx from 'clsx';
 import { formatDistanceToNow } from 'date-fns';
 
 const roleConfig = {
-  admin: { label: 'Admin', color: 'bg-destructive/10 text-destructive', icon: Shield },
+  admin: { label: 'Super Admin', color: 'bg-destructive/10 text-destructive', icon: Shield },
+  sub_admin: { label: 'Admin', color: 'bg-amber-100 text-amber-700', icon: Shield },
   accountant: { label: 'Accountant', color: 'bg-primary/10 text-primary', icon: Calculator },
   viewer: { label: 'Viewer', color: 'bg-muted text-muted-foreground', icon: Eye },
   user: { label: 'User', color: 'bg-muted text-muted-foreground', icon: User },
@@ -41,6 +43,7 @@ const typeColors = {
 const Navbar = ({ onToggleSidebar, onMobileMenuClick }) => {
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
+  const can = useCan();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([]);
@@ -291,18 +294,20 @@ const Navbar = ({ onToggleSidebar, onMobileMenuClick }) => {
                       {roleConfig[displayRole]?.label || displayRole}
                     </span>
                   </div>
-                  <div className="py-2">
-                    <button
-                      onClick={() => {
-                        setShowUserMenu(false);
-                        navigate('/settings/company');
-                      }}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted rounded-lg mx-1 transition-colors duration-200"
-                    >
-                      <Settings className="w-4 h-4" />
-                      Settings
-                    </button>
-                  </div>
+                  {can(['admin']) && (
+                    <div className="py-2">
+                      <button
+                        onClick={() => {
+                          setShowUserMenu(false);
+                          navigate('/settings/company');
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted rounded-lg mx-1 transition-colors duration-200"
+                      >
+                        <Settings className="w-4 h-4" />
+                        Settings
+                      </button>
+                    </div>
+                  )}
                   <div className="border-t border-border/50 py-2">
                     <button
                       onClick={handleLogout}

@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
+import './Counter.js';
 import Decimal from 'decimal.js';
+import companyScope from '../utils/companyScope.js';
 
 const validateDecimal = {
   validator: (v) => v === '' || v === null || v === undefined || (!isNaN(Number(v)) && isFinite(Number(v))),
@@ -161,5 +163,15 @@ tdsEntrySchema.index({ section: 1 });
 tdsEntrySchema.index({ createdBy: 1 });
 tdsEntrySchema.index({ status: 1, transactionDate: -1 });
 tdsEntrySchema.index({ form26ASMatched: 1 });
+
+tdsEntrySchema.add({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
+});
+tdsEntrySchema.plugin(companyScope);
 
 export default mongoose.model('TDSEntry', tdsEntrySchema);

@@ -1,7 +1,9 @@
 import mongoose from 'mongoose';
+import './Counter.js';
 import crypto from 'crypto';
 import Decimal from 'decimal.js';
 import { randomUUID } from 'crypto';
+import companyScope from '../utils/companyScope.js';
 
 const journalLineSchema = new mongoose.Schema({
   id: {
@@ -461,5 +463,15 @@ journalEntrySchema.pre('save', async function(next) {
   
   next();
 });
+
+journalEntrySchema.add({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
+});
+journalEntrySchema.plugin(companyScope);
 
 export default mongoose.model('JournalEntry', journalEntrySchema);

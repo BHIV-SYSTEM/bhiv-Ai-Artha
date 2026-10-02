@@ -4,9 +4,11 @@ import { Plus, Search, MapPin, Phone, IndianRupee, Building2, Filter } from 'luc
 import { PageHeader, Card, Button, Table, Badge, Input, Select, Loading, EmptyState } from '../../components/common';
 import api from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 const DealerList = () => {
   const navigate = useNavigate();
+  const can = useCan();
   const [dealers, setDealers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -61,8 +63,12 @@ const DealerList = () => {
         description="Manage dealer network, track outstanding balances, and field visits"
         action={
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={handleSyncTally}>Sync from Tally</Button>
-            <Button onClick={() => navigate('/dealers/new')} icon={Plus}>Add Dealer</Button>
+            {can(['admin']) && (
+              <Button variant="secondary" onClick={handleSyncTally}>Sync from Tally</Button>
+            )}
+            {can(['admin', 'accountant']) && (
+              <Button onClick={() => navigate('/dealers/new')} icon={Plus}>Add Dealer</Button>
+            )}
           </div>
         }
       />
@@ -138,8 +144,8 @@ const DealerList = () => {
             icon={Building2}
             title="No dealers found"
             description="Add dealers or sync from Tally to populate the dealer network."
-            actionLabel="Add Dealer"
-            onAction={() => navigate('/dealers/new')}
+            actionLabel={can(['admin', 'accountant']) ? 'Add Dealer' : undefined}
+            onAction={can(['admin', 'accountant']) ? () => navigate('/dealers/new') : undefined}
           />
         </Card>
       ) : (

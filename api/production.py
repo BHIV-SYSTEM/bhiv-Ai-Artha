@@ -17,7 +17,7 @@ from runtime.insightflow import InsightFlow
 from runtime.replay import ReplayEngine
 from runtime.pipeline import ConnectorPipeline
 
-app = FastAPI(title="Niyantran Production API")
+app = FastAPI(title="ARTHA Production API")
 app.add_middleware(ErrorBoundaryMiddleware)
 
 state_machine = DeterministicStateMachine()
@@ -53,7 +53,7 @@ async def execute_bright_connection_demo(req: SyncRequest):
     synced_ledgers = [r.canonical_data for r in all_records if r.entity_type.value == "ledger"]
     account_context = synced_ledgers[0] if synced_ledgers else {}
     
-    # 4. Admin/Dealer Notification (Niyantran)
+    # 4. Admin/Dealer Notification
     await ledger.append_event("ADMIN_NOTIFICATION", {
         "message": f"Dealer arrived. Data synced for {account_context.get('ledger_name', 'Unknown')}",
         "tenant_id": req.tenant_id,

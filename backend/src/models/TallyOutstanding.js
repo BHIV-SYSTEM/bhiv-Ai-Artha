@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
+import companyScope from '../utils/companyScope.js';
 
 /**
  * TallyOutstanding — bill-wise outstanding for a party (dealer) from Tally.
@@ -30,7 +31,13 @@ const tallyOutstandingSchema = new mongoose.Schema({
   balance: { type: Number, default: 0 },
   billType: {
     type: String,
-    enum: ['New', 'Advance', 'Agst Ref', 'On Account', 'Credit', 'Dr', 'Cr', 'UNKNOWN'],
+    // Includes real Tally BILLTYPE values ("New Ref") and parser fallbacks
+    // ("Bill") in addition to the legacy short forms.
+    enum: [
+      'New', 'New Ref', 'Advance', 'Agst Ref', 'On Account',
+      'Credit', 'Dr', 'Cr', 'Bill', 'Sales Bill', 'Purchase Bill',
+      'Debit Note', 'Credit Note', 'UNKNOWN',
+    ],
     default: 'UNKNOWN',
   },
   outstandingType: {
@@ -64,6 +71,11 @@ const tallyOutstandingSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-tallyOutstandingSchema.index({ tenantId: 1, partyId: 1, billNo: 1 }, { unique: true });
+tallyOutstandingSchema.index({ companyId: 1, tenantId: 1, partyId: 1, billNo: 1 }, { unique: true });
+
+tallyOutstandingSchema.add({
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
+});
+tallyOutstandingSchema.plugin(companyScope);
 
 export default mongoose.model('TallyOutstanding', tallyOutstandingSchema);

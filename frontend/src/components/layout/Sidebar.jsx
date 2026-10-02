@@ -21,8 +21,6 @@ import {
   Radio,
   Database,
   Workflow,
-  Radar,
-  Camera,
 } from 'lucide-react';
 import { useState } from 'react';
 import clsx from 'clsx';
@@ -98,17 +96,6 @@ const menuItems = [
     roles: ['admin', 'accountant'],
   },
   {
-    title: 'Niyantran',
-    icon: Radar,
-    path: '/niyantran',
-  },
-  {
-    title: 'Storefront OCR',
-    icon: Camera,
-    path: '/dealers/storefront-ocr',
-    roles: ['admin', 'accountant', 'field_agent'],
-  },
-  {
     title: 'Statements',
     icon: CreditCard,
     path: '/statements',
@@ -144,7 +131,11 @@ const Sidebar = ({ isOpen, mobileOpen, onMobileClose }) => {
   
   const hasAccess = (item) => {
     if (!item.roles || item.roles.length === 0) return true;
-    const userRoles = user?.roles || [user?.role];
+    let userRoles = user?.roles || [user?.role];
+    // Sub-admin (client company admin) gets admin + accountant visibility.
+    if (userRoles.includes('sub_admin')) {
+      userRoles = [...new Set([...userRoles, 'admin', 'accountant'])];
+    }
     return item.roles.some(r => userRoles.includes(r));
   };
   

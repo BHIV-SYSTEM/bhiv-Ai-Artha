@@ -1,6 +1,8 @@
 import Notification from '../models/Notification.js';
 import logger from '../config/logger.js';
 import pushNotificationService from './pushNotification.service.js';
+import recipientVerification from './recipientVerification.service.js';
+import { runWithScope, getScope } from '../utils/companyScope.js';
 
 class NotificationEventService {
   /**
@@ -59,6 +61,91 @@ class NotificationEventService {
       link: `/invoices/${invoice._id}`,
       data: { invoiceId: invoice._id, invoiceNumber: invoice.invoiceNumber, totalAmount: invoice.totalAmount },
     });
+  }
+
+  async deliverInvoiceToAccounts(invoice) {
+    try {
+      const scopeWs = getScope()?.workspace;
+      const currentWs = scopeWs ? String(scopeWs) : null;
+      const targets = new Map();
+
+      const verification = await recipientVerification.verify({
+        customerEmail: invoice.customerEmail,
+        customerGSTIN: invoice.customerGSTIN,
+      });
+
+      if (!verification.verified) return;
+
+      const match = {
+        email: verification.customerEmail,
+        gstin: verification.customerGSTIN,
+      };
+
+      for (const ws of verification.matchedWorkspaces) {
+        targets.set(String(ws), ws);
+      }
+
+      for (const [wsKey, ws] of targets) {
+        if (currentWs && wsKey === currentWs) continue;
+        await runWithScope({ workspace: ws }, () =>
+          this._create({
+            title: `Invoice received: ${invoice.invoiceNumber}`,
+            body: `${invoice.customerName} - Rs.${Number(invoice.totalAmount || 0).toLocaleString('en-IN')} (Invoice: ${invoice.invoiceNumber}, Date: ${invoice.invoiceDate ? new Date(invoice.invoiceDate).toLocaleDateString('en-IN') : '-'}, Due: ${invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('en-IN') : '-'}, Status: Sent)`,
+            type: 'info',
+            category: 'finance',
+            link: `/invoices/${invoice._id}?shared=1`,
+            data: {
+              invoiceId: invoice._id,
+              invoiceNumber: invoice.invoiceNumber,
+              totalAmount: invoice.totalAmount,
+              customerName: invoice.customerName,
+              customerEmail: invoice.customerEmail,
+              customerGSTIN: invoice.customerGSTIN,
+              invoiceDate: invoice.invoiceDate,
+              dueDate: invoice.dueDate,
+              match,
+            },
+          })
+        );
+      }
+    } catch (err) {
+      logger.warn(`Invoice delivery notification failed: ${err.message}`);
+    }
+  }
+
+  async userCreated(user, creator) {
+    try {
+      const roleLabels = { admin: 'Super Admin', sub_admin: 'Admin', accountant: 'Accountant', viewer: 'Viewer' };
+      const roleLabel = roleLabels[user.role] || user.role;
+      const creatorName = creator?.name || 'Admin';
+      const scopeWs = getScope()?.workspace;
+      const currentWs = scopeWs ? String(scopeWs) : null;
+
+      await this._create({
+        title: `User created: ${user.name}`,
+        body: `${creatorName} created ${user.name} (${roleLabel}) - ${user.email}`,
+        type: 'success',
+        category: 'system',
+        link: '/settings/users',
+        data: { userId: user._id, name: user.name, email: user.email, role: user.role, createdBy: creator?._id || null },
+      });
+
+      const targetWs = user.companyId || user._id;
+      if (!currentWs || String(targetWs) !== currentWs) {
+        await runWithScope({ workspace: targetWs }, () =>
+          this._create({
+            title: 'Welcome to ARTHA',
+            body: `Your ${roleLabel} account (${user.email}) has been created by ${creatorName}`,
+            type: 'success',
+            category: 'system',
+            link: null,
+            data: { userId: user._id, role: user.role, createdBy: creator?._id || null },
+          })
+        );
+      }
+    } catch (err) {
+      logger.warn(`User-created notification failed: ${err.message}`);
+    }
   }
 
   async invoicePayment(invoice, paymentAmount, paymentMethod) {
@@ -181,28 +268,6 @@ class NotificationEventService {
       category: 'crm',
       link: `/dealers`,
       data: { created, updated },
-    });
-  }
-
-  async agentCheckIn(agentName, dealerName) {
-    await this._create({
-      title: `${agentName} checked in`,
-      body: `Arrived at ${dealerName}`,
-      type: 'location',
-      category: 'niyantran',
-      link: `/niyantran`,
-      data: { agentName, dealerName },
-    });
-  }
-
-  async agentCheckOut(agentName, dealerName, outcome) {
-    await this._create({
-      title: `${agentName} checked out`,
-      body: `Left ${dealerName}${outcome ? ` — ${outcome}` : ''}`,
-      type: 'location',
-      category: 'niyantran',
-      link: `/niyantran`,
-      data: { agentName, dealerName, outcome },
     });
   }
 }

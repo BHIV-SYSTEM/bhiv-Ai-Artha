@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import companyScope from '../utils/companyScope.js';
 
 const gstReturnSchema = new mongoose.Schema({
   returnType: {
@@ -91,6 +92,15 @@ const gstReturnSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
   },
+
+  // Portal filing handoff record
+  acknowledgementNumber: String,
+  portalUrl: String,
+  filedVia: {
+    type: String,
+    enum: ['GST_PORTAL', 'GSP', 'API'],
+    default: 'GST_PORTAL',
+  },
   
   // Metadata
   jsonData: mongoose.Schema.Types.Mixed, // Full GST JSON format
@@ -107,5 +117,15 @@ gstReturnSchema.index({ filedDate: -1 });
 gstReturnSchema.index({ filedBy: 1 });
 gstReturnSchema.index({ gstin: 1, status: 1 });
 gstReturnSchema.index({ returnType: 1, status: 1 });
+
+gstReturnSchema.add({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
+});
+gstReturnSchema.plugin(companyScope);
 
 export default mongoose.model('GSTReturn', gstReturnSchema);

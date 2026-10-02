@@ -12,6 +12,7 @@ import {
   Search,
   Filter,
   Eye,
+  ExternalLink,
 } from 'lucide-react';
 import {
   PieChart,
@@ -36,8 +37,10 @@ import {
 } from '../../components/common';
 import api from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 const TDSManagement = () => {
+  const can = useCan();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
   const [quarter, setQuarter] = useState('Q4');
@@ -138,6 +141,22 @@ const TDSManagement = () => {
     } catch (error) {
       toast.error('Failed to export Form 26Q');
     }
+  };
+
+  const TRACES_PORTAL_URL =
+    import.meta.env.VITE_TRACES_PORTAL_URL || 'https://www.traces.gov.in';
+
+  // Hand off to the government portal: export Form 26Q, then open TRACES
+  const openTracesPortal = () => {
+    window.open(TRACES_PORTAL_URL, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleFileOnPortal = async () => {
+    await handleExportForm26Q();
+    openTracesPortal();
+    toast.success(
+      `Form 26Q downloaded. Complete the filing on ${new URL(TRACES_PORTAL_URL).hostname}.`
+    );
   };
 
   const quarterOptions = [
@@ -306,11 +325,16 @@ const TDSManagement = () => {
               onChange={(e) => setYear(e.target.value)}
               className="w-36"
             />
-            <Button variant="primary" icon={Plus} onClick={() => setShowCreateModal(true)}>
-              Create Entry
-            </Button>
+            {can(['admin', 'accountant']) && (
+              <Button variant="primary" icon={Plus} onClick={() => setShowCreateModal(true)}>
+                Create Entry
+              </Button>
+            )}
             <Button variant="secondary" icon={Download} onClick={handleExportForm26Q}>
               Download Form 26Q
+            </Button>
+            <Button variant="outline" icon={ExternalLink} onClick={handleFileOnPortal}>
+              File on TRACES Portal
             </Button>
           </div>
         }
@@ -508,8 +532,8 @@ const TDSManagement = () => {
               icon={FileText}
               title="No TDS entries found"
               description="Create your first TDS entry to start tracking Tax Deducted at Source."
-              actionLabel="Create TDS Entry"
-              onAction={() => setShowCreateModal(true)}
+            actionLabel={can(['admin', 'accountant']) ? 'Create TDS Entry' : undefined}
+            onAction={can(['admin', 'accountant']) ? () => setShowCreateModal(true) : undefined}
             />
           </div>
         ) : (
@@ -552,13 +576,13 @@ const TDSManagement = () => {
                   </Table.Cell>
                   <Table.Cell>{getStatusBadge(entry.status)}</Table.Cell>
                   <Table.Cell>
-                    {entry.status === 'pending' ? (
-                      <Button size="sm" onClick={() => openPaymentModal(entry)}>
-                        Pay
-                      </Button>
-                    ) : (
+                    {entry.status !== 'pending' ? (
                       <Button variant="ghost" size="sm" icon={Eye}>
                         Challan
+                      </Button>
+                    ) : can(['admin', 'accountant']) && (
+                      <Button size="sm" onClick={() => openPaymentModal(entry)}>
+                        Pay
                       </Button>
                     )}
                   </Table.Cell>

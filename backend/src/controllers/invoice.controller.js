@@ -91,6 +91,35 @@ export const getInvoice = async (req, res) => {
   }
 };
 
+// @desc    Get invoice shared with the requester (matched by customer email or GST)
+// @route   GET /api/v1/invoices/:id/shared
+// @access  Private
+export const getSharedInvoice = async (req, res) => {
+  try {
+    const invoice = await invoiceService.getSharedInvoice(req.params.id, req.user);
+    if (!invoice) {
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
+    }
+    res.json({ success: true, data: invoice });
+  } catch (error) {
+    logger.error('Get shared invoice error:', error);
+    res.status(500).json({ success: false, message: 'Could not load invoice' });
+  }
+};
+
+// @desc    List invoices addressed to the requester (shared from other workspaces)
+// @route   GET /api/v1/invoices/shared
+// @access  Private
+export const getSharedInvoices = async (req, res) => {
+  try {
+    const invoices = await invoiceService.getSharedInvoices(req.user);
+    res.json({ success: true, data: invoices });
+  } catch (error) {
+    logger.error('Get shared invoices error:', error);
+    res.status(500).json({ success: false, message: 'Could not load shared invoices' });
+  }
+};
+
 // @desc    Update invoice
 // @route   PUT /api/v1/invoices/:id
 // @access  Private (accountant, admin)

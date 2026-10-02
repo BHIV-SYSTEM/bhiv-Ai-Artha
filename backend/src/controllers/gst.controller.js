@@ -97,7 +97,11 @@ export const getGSTReturns = async (req, res) => {
 // @access  Private (accountant, admin)
 export const fileGSTReturn = async (req, res) => {
   try {
-    const gstReturn = await gstService.fileGSTReturn(req.params.id, req.user._id);
+    const gstReturn = await gstService.fileGSTReturn(req.params.id, req.user._id, {
+      acknowledgementNumber: req.body?.acknowledgementNumber,
+      portalUrl: req.body?.portalUrl,
+      filedVia: req.body?.filedVia || 'GST_PORTAL',
+    });
     
     res.json({
       success: true,

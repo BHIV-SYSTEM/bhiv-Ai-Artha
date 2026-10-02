@@ -40,12 +40,28 @@ export function computeWindow(lastSyncAt, defaultFromDays) {
   };
 }
 
+/** Detect gateway-unreachable failures (cloud boxes have no local Tally). */
+export function isUnreachable(result) {
+  if (!result) return false;
+  const msg = result.error || '';
+  if (/ECONNREFUSED|Cannot reach Tally gateway|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH/i.test(msg)) return true;
+  return (result.errors || []).some(
+    (e) =>
+      e.code === 'UNREACHABLE' ||
+      /ECONNREFUSED|Cannot reach Tally gateway|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH/i.test(e.message || ''),
+  );
+}
+
+const UNREACHABLE_PAUSE_AFTER = 3;
+
 class TallySyncScheduler {
   constructor() {
     this.timer = null;
     this.initialTimer = null;
     this.running = false;
     this.lastRun = null;
+    this.consecutiveUnreachable = 0;
+    this.pausedReason = null;
   }
 
   isEnabled() {
@@ -79,6 +95,36 @@ class TallySyncScheduler {
     }
   }
 
+  /**
+   * Track consecutive gateway-unreachable failures. After
+   * UNREACHABLE_PAUSE_AFTER in a row the interval is paused so cloud
+   * deployments stop flooding TallySyncRun (and the Tally Connect status
+   * page) with identical failures every cycle. A successful run — including
+   * a manual "Sync Now" — re-arms the scheduler automatically.
+   */
+  noteOutcome(result) {
+    if (result && result.status === 'failed' && isUnreachable(result)) {
+      this.consecutiveUnreachable += 1;
+      if (this.consecutiveUnreachable >= UNREACHABLE_PAUSE_AFTER && this.timer) {
+        this.stop();
+        this.pausedReason = `Tally gateway unreachable from server (last: ${result.errors?.[0]?.message || result.error})`;
+        logger.warn(
+          `[TALLY_SYNC] scheduler paused after ${this.consecutiveUnreachable} unreachable runs — ` +
+            `Tally gateway ${process.env.TALLY_HOST || '127.0.0.1'}:${process.env.TALLY_PORT || 9000} is not reachable from this server. ` +
+            'Cloud deployments receive data via the local connector agent (POST /api/v1/tally-connect/ingest). ' +
+            'A manual "Sync Now" or server restart resumes the scheduler.',
+        );
+      }
+    } else {
+      const wasPaused = Boolean(this.pausedReason) || this.consecutiveUnreachable > 0;
+      this.consecutiveUnreachable = 0;
+      this.pausedReason = null;
+      if (wasPaused && !this.timer && this.isEnabled()) {
+        this.start();
+      }
+    }
+  }
+
   async runOnce({ company } = {}) {
     if (this.running) {
       return { skipped: true, reason: 'sync already running' };
@@ -98,11 +144,14 @@ class TallySyncScheduler {
         `[TALLY_SYNC] run ${result.status} incremental=${window.incremental} ` +
           `window=${window.fromDate}..${window.toDate} mdu=${result.mduCount}`
       );
+      this.noteOutcome(result);
       return result;
     } catch (err) {
       logger.warn(`[TALLY_SYNC] run failed: ${err.message}`);
       this.lastRun = { at: new Date(), status: 'failed', error: err.message };
-      return { status: 'failed', error: err.message };
+      const result = { status: 'failed', error: err.message };
+      this.noteOutcome(result);
+      return result;
     } finally {
       this.running = false;
     }
@@ -139,10 +188,13 @@ class TallySyncScheduler {
       enabled: this.isEnabled(),
       intervalMinutes: Math.round(intervalMs / 60000),
       running: this.running,
+      paused: Boolean(this.pausedReason),
+      pausedReason: this.pausedReason || undefined,
       lastRun: this.lastRun,
-      nextSyncAt: this.lastRun
-        ? new Date(this.lastRun.at.getTime() + intervalMs)
-        : null,
+      nextSyncAt:
+        this.timer && this.lastRun
+          ? new Date(this.lastRun.at.getTime() + intervalMs)
+          : undefined,
     };
   }
 }

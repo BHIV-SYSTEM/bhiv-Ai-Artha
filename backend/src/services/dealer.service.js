@@ -118,7 +118,7 @@ class DealerService {
         await existing.save();
         updated++;
       } else {
-        // Spread default coordinates so dealer appears on Niyantran map.
+        // Spread default coordinates for dealer map positioning.
         // Individual dealers can be re-positioned later via PUT /dealers/:id/location.
         const jitterLat = defaultLat ? defaultLat + (Math.random() - 0.5) * 0.02 : null;
         const jitterLng = defaultLng ? defaultLng + (Math.random() - 0.5) * 0.02 : null;

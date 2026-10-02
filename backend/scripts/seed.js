@@ -5,7 +5,8 @@ import Invoice from '../src/models/Invoice.js';
 import Expense from '../src/models/Expense.js';
 import GSTReturn from '../src/models/GSTReturn.js';
 import TDSEntry from '../src/models/TDSEntry.js';
-import CompanySettings from '../src/models/CompanySettings.js';
+import companySettingsService from '../src/services/companySettings.service.js';
+import { runWithScope } from '../src/utils/companyScope.js';
 import chartOfAccountsService from '../src/services/chartOfAccounts.service.js';
 import ledgerService from '../src/services/ledger.service.js';
 import invoiceService from '../src/services/invoice.service.js';
@@ -157,8 +158,11 @@ const seedDatabase = async () => {
     await ledgerService.postJournalEntry(entry4._id, accountant._id);
     logger.info('Sample entry 4 created and posted');
 
-    // Create company settings FIRST — required for GST calculations in invoice/expense
-    await CompanySettings.create({
+    // Create company settings FIRST — required for GST calculations in invoice/expense.
+    // Written through the service so it lands on the exact document getSettings
+    // reads: the legacy `_id: 'company_settings'` singleton (scripts have no
+    // request scope) plus the owner admin's workspace copy (UI requests are scoped).
+    const companySettings = {
       companyName: 'Artha Accounting Pvt Ltd',
       legalName: 'Artha Accounting Private Limited',
       address: {
@@ -183,7 +187,9 @@ const seedDatabase = async () => {
         defaultTDSRate: 10,
         autoCalculateTDS: true
       }
-    });
+    };
+    await companySettingsService.updateSettings(companySettings);
+    await runWithScope({ workspace: admin._id }, () => companySettingsService.updateSettings(companySettings));
     logger.info('Company settings created');
 
     // Create sample invoice
@@ -253,7 +259,7 @@ const seedDatabase = async () => {
     logger.info('Sample expense created and recorded');
 
     // Create sample GST return
-    const sampleGSTReturn = await GSTReturn.create({
+    await GSTReturn.create({
       returnType: 'GSTR1',
       period: { month: 12, year: 2024 },
       gstin: '27AABCU9603R1ZX',
@@ -274,7 +280,7 @@ const seedDatabase = async () => {
     logger.info('Sample GST return created');
 
     // Create sample TDS entry
-    const sampleTDSEntry = await TDSEntry.create({
+    await TDSEntry.create({
       transactionDate: new Date('2025-01-25'),
       deductee: {
         name: 'Professional Consultant',

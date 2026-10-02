@@ -4,9 +4,11 @@ import { Upload, FileText, CheckCircle, XCircle, Clock, AlertCircle, Trash2, Eye
 import toast from 'react-hot-toast';
 import { bankStatementService } from '../../services';
 import { PageHeader, Card, Button } from '../../components/common';
+import { useCan } from '../../utils/permissions';
 
 const Statements = () => {
   const navigate = useNavigate();
+  const can = useCan();
   const [statements, setStatements] = useState([]);
   const [loading, setLoading] = useState(true);
   const [pagination, setPagination] = useState({
@@ -129,10 +131,12 @@ const Statements = () => {
         title="Bank Statements"
         description="Upload and manage your bank account statements"
         actions={
-          <Button onClick={() => navigate('/statements/upload')}>
-            <Upload className="w-4 h-4 mr-2" />
-            Upload Statement
-          </Button>
+          can(['admin', 'accountant']) && (
+            <Button onClick={() => navigate('/statements/upload')}>
+              <Upload className="w-4 h-4 mr-2" />
+              Upload Statement
+            </Button>
+          )
         }
       />
 
@@ -240,13 +244,15 @@ const Statements = () => {
                   <td colSpan="9" className="px-6 py-8 text-center text-gray-500">
                     <FileText className="w-12 h-12 mx-auto mb-2 text-gray-400" />
                     <p>No statements uploaded yet</p>
-                    <Button
-                      variant="link"
-                      onClick={() => navigate('/statements/upload')}
-                      className="mt-2"
-                    >
-                      Upload your first statement
-                    </Button>
+                    {can(['admin', 'accountant']) && (
+                      <Button
+                        variant="link"
+                        onClick={() => navigate('/statements/upload')}
+                        className="mt-2"
+                      >
+                        Upload your first statement
+                      </Button>
+                    )}
                   </td>
                 </tr>
               ) : (
@@ -299,7 +305,7 @@ const Statements = () => {
                         >
                           <Eye className="w-4 h-4" />
                         </Button>
-                        {statement.status === 'pending' && (
+                        {statement.status === 'pending' && can(['admin', 'accountant']) && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -308,7 +314,7 @@ const Statements = () => {
                             Process
                           </Button>
                         )}
-                        {statement.status === 'completed' && (
+                        {statement.status === 'completed' && can(['admin', 'accountant']) && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -317,15 +323,17 @@ const Statements = () => {
                             Match
                           </Button>
                         )}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleDeleteStatement(statement._id, statement.statementNumber)}
-                          className="text-red-600 border-red-200 hover:bg-red-50"
-                          title="Delete permanently"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
+                        {can(['admin']) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleDeleteStatement(statement._id, statement.statementNumber)}
+                            className="text-red-600 border-red-200 hover:bg-red-50"
+                            title="Delete permanently"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
                       </div>
                     </td>
                   </tr>

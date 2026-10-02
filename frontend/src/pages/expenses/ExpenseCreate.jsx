@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -13,6 +13,7 @@ import {
   Select,
   Textarea,
   Loading,
+  ProgressSubmitButton,
 } from '../../components/common';
 import api from '../../services/api';
 import { formatCurrency } from '../../utils/formatters';
@@ -63,7 +64,23 @@ const ExpenseCreate = () => {
   const watchAmount = watch('amount');
   const watchGstAmount = watch('gstAmount');
   const watchGstRate = watch('gstRate');
+  const watchValues = watch();
   const showGstFields = (watchGstAmount > 0) || (watchGstRate > 0);
+
+  const filesRef = useRef([]);
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+
+  // Water-fill progress: every backend-required field must be complete
+  const requiredFields = ['description', 'amount', 'category', 'date', 'vendor'];
+  const completedFields = requiredFields.filter((field) => {
+    const value = watchValues[field];
+    if (field === 'amount') return Number(value) > 0;
+    if (field === 'description') return String(value || '').trim().length >= 3;
+    return String(value || '').trim().length > 0;
+  }).length;
+  const progress = Math.round((completedFields / requiredFields.length) * 100);
 
   useEffect(() => {
     if (isEditing) {
@@ -83,6 +100,8 @@ const ExpenseCreate = () => {
       setValue('date', expense.date?.split('T')[0] || '');
       setValue('notes', expense.notes || '');
       setValue('gstAmount', expense.gstAmount || 0);
+      setValue('gstRate', expense.gstRate || 0);
+      setValue('supplierState', expense.supplierState || '');
     } catch (error) {
       toast.error('Failed to fetch expense');
       navigate('/expenses');
@@ -114,6 +133,87 @@ const ExpenseCreate = () => {
     }
   }, []);
 
+  // Apply OCR response to the form (shared by auto-scan and manual scan)
+  const applyOcrData = (data) => {
+    const filled = [];
+
+    if (data.vendor && data.vendor !== 'Unknown Vendor') {
+      setValue('vendor', data.vendor);
+      filled.push('vendor');
+    }
+
+    const amount = parseFloat(data.amount);
+    if (!isNaN(amount) && amount > 0) {
+      setValue('amount', amount);
+      filled.push('amount');
+    }
+
+    if (data.date) {
+      setValue('date', data.date);
+      filled.push('date');
+    }
+
+    const gst = parseFloat(data.gstAmount ?? data.taxAmount ?? 0);
+    const needsRateCheck = !isNaN(gst) && gst > 0;
+    if (needsRateCheck) {
+      setValue('gstAmount', gst);
+      filled.push('GST amount');
+
+      let rate = parseFloat(data.gstRate);
+      if (![0, 5, 12, 18, 28].includes(rate)) {
+        const derived = amount > 0 ? (gst / amount) * 100 : 0;
+        rate = [5, 12, 18, 28].find((allowed) => Math.abs(allowed - derived) <= 1) || 0;
+      }
+      if (rate > 0) {
+        setValue('gstRate', rate);
+        filled.push('GST rate');
+      }
+      if (data.supplierState) {
+        setValue('supplierState', data.supplierState);
+        filled.push('supplier state');
+      }
+    }
+
+    if (!String(watch('description') || '').trim()) {
+      if (data.invoiceNumber) {
+        setValue('description', `Receipt #${String(data.invoiceNumber).substring(0, 40)}`);
+      } else if (data.vendor && data.vendor !== 'Unknown Vendor') {
+        setValue('description', `Receipt from ${data.vendor}`.substring(0, 80));
+      }
+    }
+
+    if (filled.length) {
+      toast.success(`Receipt scanned! Filled: ${filled.join(', ')}.`);
+    }
+    if (needsRateCheck && !parseFloat(watch('gstRate'))) {
+      toast('GST was found on the receipt — please confirm the GST rate and supplier state.', {
+        icon: '⚠️',
+      });
+    }
+  };
+
+  const scanReceiptWithOCR = async (file) => {
+    setScanning(true);
+    try {
+      const formData = new FormData();
+      formData.append('receipt', file);
+
+      const response = await api.post('/expenses/ocr', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      applyOcrData(response.data.data || {});
+    } catch (error) {
+      toast.error('Auto-scan failed. You can re-scan manually or enter details.');
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const autoScanReceipt = async (file) => {
+    await scanReceiptWithOCR(file);
+  };
+
   const handleFiles = useCallback((fileList) => {
     const newFiles = Array.from(fileList).filter((file) => {
       const isValid = file.type.startsWith('image/') || file.type === 'application/pdf';
@@ -121,14 +221,23 @@ const ExpenseCreate = () => {
       return isValid && isSmallEnough;
     });
 
-    setFiles((prev) => {
-      if (prev.length + newFiles.length > 5) {
-        toast.error('Maximum 5 files allowed');
-        return prev;
-      }
-      return [...prev, ...newFiles];
-    });
-  }, []);
+    if (newFiles.length === 0) {
+      toast.error('Only image or PDF receipts up to 10MB are allowed');
+      return;
+    }
+
+    if (filesRef.current.length + newFiles.length > 5) {
+      toast.error('Maximum 5 files allowed');
+      return;
+    }
+
+    setFiles((prev) => [...prev, ...newFiles]);
+
+    // First receipt in the box → auto-scan it and pre-fill the form
+    if (filesRef.current.length === 0) {
+      autoScanReceipt(newFiles[0]);
+    }
+  }, [autoScanReceipt]);
 
   const handleDrop = useCallback((e) => {
     e.preventDefault();
@@ -140,36 +249,6 @@ const ExpenseCreate = () => {
     }
   }, [handleFiles]);
 
-  const autoScanReceipt = async (file) => {
-    setScanning(true);
-    try {
-      const formData = new FormData();
-      formData.append('receipt', file);
-
-      const response = await api.post('/expenses/ocr', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-
-      const { vendor, amount, date, gstAmount, taxAmount, description } = response.data.data;
-
-      if (vendor && vendor !== 'Unknown Vendor') setValue('vendor', vendor);
-      if (amount && amount !== '0.00') setValue('amount', parseFloat(amount));
-      if (date) setValue('date', date);
-      if (gstAmount && gstAmount !== '0.00') setValue('gstAmount', parseFloat(gstAmount));
-      else if (taxAmount && taxAmount !== '0.00') setValue('gstAmount', parseFloat(taxAmount));
-      if (description) {
-        const current = watch('description');
-        if (!current) setValue('description', description.substring(0, 200));
-      }
-
-      toast.success('Receipt auto-scanned! Fields filled automatically.');
-    } catch (error) {
-      toast.error('Auto-scan failed. You can try manual scan or enter details.');
-    } finally {
-      setScanning(false);
-    }
-  };
-
   const removeFile = (index) => {
     setFiles((prev) => prev.filter((_, i) => i !== index));
   };
@@ -179,30 +258,7 @@ const ExpenseCreate = () => {
       toast.error('Please upload a receipt first');
       return;
     }
-
-    setScanning(true);
-    try {
-      const formData = new FormData();
-      formData.append('receipt', files[0]);
-
-      const response = await api.post('/expenses/ocr', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-
-      const { vendor, amount, date, gstAmount, taxAmount } = response.data.data;
-      
-      if (vendor && vendor !== 'Unknown Vendor') setValue('vendor', vendor);
-      if (amount && amount !== '0.00') setValue('amount', parseFloat(amount));
-      if (date) setValue('date', date);
-      if (gstAmount && gstAmount !== '0.00') setValue('gstAmount', parseFloat(gstAmount));
-      else if (taxAmount && taxAmount !== '0.00') setValue('gstAmount', parseFloat(taxAmount));
-      
-      toast.success('Receipt scanned successfully!');
-    } catch (error) {
-      toast.error('Failed to scan receipt. Please enter details manually.');
-    } finally {
-      setScanning(false);
-    }
+    await scanReceiptWithOCR(files[0]);
   };
 
   const onSubmit = async (data) => {
@@ -508,9 +564,14 @@ const ExpenseCreate = () => {
           >
             Cancel
           </Button>
-          <Button type="submit" loading={saving} icon={Save}>
+          <ProgressSubmitButton
+            progress={progress}
+            loading={saving}
+            icon={Save}
+            hint="Fill description, amount, category, date and vendor (validated on submit)"
+          >
             {isEditing ? 'Update Expense' : 'Submit Expense'}
-          </Button>
+          </ProgressSubmitButton>
         </div>
       </form>
     </div>

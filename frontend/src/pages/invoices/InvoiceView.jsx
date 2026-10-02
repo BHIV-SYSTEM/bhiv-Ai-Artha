@@ -1,5 +1,5 @@
 import { useState, useEffect, Component } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Send,
   Download,
@@ -26,6 +26,7 @@ import {
 } from '../../components/common';
 import api from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -58,19 +59,23 @@ class ErrorBoundary extends Component {
 const InvoiceViewInner = () => {
   const navigate = useNavigate();
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  const isShared = searchParams.get('shared') === '1';
+  const can = useCan();
   const [invoice, setInvoice] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [processing, setProcessing] = useState(false);
+  const [verifyError, setVerifyError] = useState(null);
 
   useEffect(() => {
     fetchInvoice();
-  }, [id]);
+  }, [id, isShared]);
 
   const fetchInvoice = async () => {
     try {
-      const response = await api.get(`/invoices/${id}`);
+      const response = await api.get(isShared ? `/invoices/${id}/shared` : `/invoices/${id}`);
       setInvoice(response.data.data);
     } catch (error) {
       console.error('Failed to fetch invoice:', error);
@@ -87,7 +92,12 @@ const InvoiceViewInner = () => {
       toast.success('Invoice sent successfully');
       fetchInvoice();
     } catch (error) {
-      toast.error('Failed to send invoice');
+      const data = error?.response?.data;
+      if (data?.code === 'RECIPIENT_NOT_VERIFIED') {
+        setVerifyError(data);
+      } else {
+        toast.error('Failed to send invoice');
+      }
     } finally {
       setProcessing(false);
     }
@@ -187,26 +197,30 @@ const InvoiceViewInner = () => {
         backUrl="/invoices"
         action={
           <div className="flex gap-2">
-            {invoice.status === 'draft' && (
+            {!isShared && invoice.status === 'draft' && can(['admin', 'accountant']) && (
               <Button onClick={handleSendInvoice} loading={processing} icon={Send}>
                 Send Invoice
               </Button>
             )}
-            {['sent', 'partial', 'overdue'].includes(invoice.status) && (
+            {!isShared && ['sent', 'partial', 'overdue'].includes(invoice.status) && can(['admin', 'accountant']) && (
               <Button onClick={() => setShowPaymentModal(true)} icon={CreditCard}>
                 Record Payment
               </Button>
             )}
-            <Button variant="secondary" icon={Download} onClick={handleDownloadPDF}>
-              Download PDF
-            </Button>
-            <Button
-              variant="secondary"
-              icon={Edit}
-              onClick={() => navigate(`/invoices/${id}/edit`)}
-            >
-              Edit
-            </Button>
+            {!isShared && (
+              <Button variant="secondary" icon={Download} onClick={handleDownloadPDF}>
+                Download PDF
+              </Button>
+            )}
+            {!isShared && can(['admin', 'accountant']) && (
+              <Button
+                variant="secondary"
+                icon={Edit}
+                onClick={() => navigate(`/invoices/${id}/edit`)}
+              >
+                Edit
+              </Button>
+            )}
           </div>
         }
       />
@@ -227,7 +241,10 @@ const InvoiceViewInner = () => {
           <div className="text-right">
             <h1 className="text-3xl font-bold text-foreground">INVOICE</h1>
             <p className="text-lg font-medium text-blue-600 mt-1">{invoice.invoiceNumber}</p>
-            <div className="mt-2">{getStatusBadge(invoice.status)}</div>
+            <div className="mt-2 flex items-center justify-end gap-2">
+              {isShared && <Badge variant="info">Shared</Badge>}
+              {getStatusBadge(invoice.status)}
+            </div>
           </div>
         </div>
 
@@ -417,6 +434,70 @@ const InvoiceViewInner = () => {
           </div>
         </div>
       </Modal>
+
+      {/* Recipient Verification Modal */}
+      {verifyError && (
+      <Modal
+        isOpen={true}
+        onClose={() => setVerifyError(null)}
+        title="Verify recipient details"
+        description="The invoice was not sent"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+            <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+            <p className="text-sm text-foreground">
+              The invoice email and GSTIN must both match the same ARTHA account before this invoice can be sent.
+            </p>
+          </div>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">Invoice email</span>
+              <span className="font-medium text-foreground">{invoice.customerEmail || '-'}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">Invoice GSTIN</span>
+              <span className="font-medium text-foreground">{invoice.customerGSTIN || '-'}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">Email matched</span>
+              <span className={verifyError.details?.emailMatched ? 'text-green-600' : 'text-red-500'}>
+                {verifyError.details?.emailMatched ? 'Yes' : 'No'}
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">GST matched</span>
+              <span className={verifyError.details?.gstMatched ? 'text-green-600' : 'text-red-500'}>
+                {verifyError.details?.gstMatched ? 'Yes' : 'No'}
+              </span>
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {!verifyError.details?.customerEmail || !verifyError.details?.customerGSTIN
+              ? 'The invoice is missing a customer email or GSTIN. Add both, and make sure they match the recipient ARTHA account.'
+              : !verifyError.details?.emailMatched
+                ? 'No ARTHA account was found with this email. Check the customer details on the invoice.'
+                : !verifyError.details?.gstMatched
+                  ? 'This email matches an ARTHA account, but the GSTIN does not match that account. Update the invoice or the recipient account so both match.'
+                  : 'The email and GSTIN match ARTHA accounts, but not the same one. Update the invoice so both belong to the same account.'}
+          </p>
+          <div className="flex justify-end gap-3 pt-4">
+            <Button variant="secondary" onClick={() => setVerifyError(null)}>
+              Close
+            </Button>
+            <Button
+              icon={Edit}
+              onClick={() => {
+                setVerifyError(null);
+                navigate(`/invoices/${id}/edit`);
+              }}
+            >
+              Edit Invoice
+            </Button>
+          </div>
+        </div>
+      </Modal>
+      )}
     </div>
   );
 };

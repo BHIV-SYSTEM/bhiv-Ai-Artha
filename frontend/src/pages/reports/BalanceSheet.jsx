@@ -18,8 +18,10 @@ import {
 import api from '../../services/api';
 import toast from 'react-hot-toast';
 import { formatCurrency, formatDate, exportReportPDF } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 const BalanceSheet = () => {
+  const can = useCan();
   const [loading, setLoading] = useState(true);
   const [asOfDate, setAsOfDate] = useState(new Date().toISOString().split('T')[0]);
   const [data, setData] = useState(null);
@@ -181,9 +183,11 @@ const BalanceSheet = () => {
               onChange={(e) => setAsOfDate(e.target.value)}
               className="px-3 py-2 border border-border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
-            <Button variant="secondary" icon={Download} onClick={handleExport}>
-              Export PDF
-            </Button>
+            {can(['admin']) && (
+              <Button variant="secondary" icon={Download} onClick={handleExport}>
+                Export PDF
+              </Button>
+            )}
           </div>
         }
       />

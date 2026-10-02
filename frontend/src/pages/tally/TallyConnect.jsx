@@ -19,8 +19,39 @@ import {
 } from '../../components/common';
 import api from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 const AUTO_REFRESH_MS = 30000;
+
+const CopyField = ({ label, value }) => {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+  return (
+    <div>
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-1 mt-1">
+        <code className="font-mono text-[11px] break-all bg-muted px-2 py-1 rounded flex-1 select-all">
+          {value}
+        </code>
+        <button
+          type="button"
+          onClick={copy}
+          className="text-xs px-2 py-1 border rounded hover:bg-muted"
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+    </div>
+  );
+};
 
 const ProvenanceBadge = ({ provenance }) => {
   if (!provenance) return null;
@@ -124,6 +155,7 @@ const ProvenancePanel = ({ title, provenance, rawData }) => {
 };
 
 const TallyConnect = () => {
+  const can = useCan();
   const [parties, setParties] = useState([]);
   const [outstanding, setOutstanding] = useState([]);
   const [vouchers, setVouchers] = useState([]);
@@ -132,6 +164,7 @@ const TallyConnect = () => {
   const [syncing, setSyncing] = useState(false);
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [error, setError] = useState('');
+  const [creds, setCreds] = useState(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -171,6 +204,29 @@ const TallyConnect = () => {
     }
   };
 
+  // This account's connector credentials (admin/sub-admin only — hidden by role, 403 stays as fallback)
+  useEffect(() => {
+    if (!can(['admin', 'sub_admin'])) {
+      setCreds(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .get('/tally-connect/credentials')
+      .then((r) => { if (!cancelled) setCreds(r.data.data || null); })
+      .catch(() => { if (!cancelled) setCreds(null); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const rotateCreds = async () => {
+    try {
+      const r = await api.post('/tally-connect/credentials/rotate');
+      setCreds(r.data.data || null);
+    } catch (err) {
+      setError(err?.response?.data?.message || 'Could not regenerate credentials');
+    }
+  };
+
   const overdueTotal = outstanding
     .filter((o) => o.daysOverdue > 0)
     .reduce((sum, o) => sum + parseFloat(o.balance || 0), 0);
@@ -194,9 +250,11 @@ const TallyConnect = () => {
             <Button variant="secondary" icon={RefreshCw} onClick={fetchAll}>
               Refresh
             </Button>
-            <Button icon={Database} onClick={syncNow} disabled={syncing}>
-              {syncing ? 'Syncing…' : 'Sync Now'}
-            </Button>
+            {can(['admin', 'accountant']) && (
+              <Button icon={Database} onClick={syncNow} disabled={syncing}>
+                {syncing ? 'Syncing…' : 'Sync Now'}
+              </Button>
+            )}
           </div>
         }
       />
@@ -206,6 +264,27 @@ const TallyConnect = () => {
           <p className="text-sm text-red-700 flex items-center gap-2">
             <AlertTriangle className="w-4 h-4" /> {error}
           </p>
+        </Card>
+      )}
+
+      {/* Per-account connector credentials */}
+      {creds && (
+        <Card className="p-4">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-lg font-semibold">Connect this account to the connector</h3>
+            <Button variant="secondary" onClick={rotateCreds}>
+              Regenerate keys
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mb-3">
+            Put these in the connector&apos;s .env (CLOUD_URL, CLOUD_API_KEY, CLOUD_HMAC_SECRET).
+            Data pushed with these keys is visible only in this account.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <CopyField label="CLOUD_URL" value={creds.cloudUrl} />
+            <CopyField label="CLOUD_API_KEY" value={creds.apiKey} />
+            <CopyField label="CLOUD_HMAC_SECRET" value={creds.hmacSecret} />
+          </div>
         </Card>
       )}
 

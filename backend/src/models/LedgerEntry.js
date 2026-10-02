@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import crypto from 'crypto';
 import { randomUUID } from 'crypto';
+import companyScope from '../utils/companyScope.js';
 
 const ledgerEntrySchema = new mongoose.Schema(
   {
@@ -71,5 +72,15 @@ ledgerEntrySchema.statics.computeHash = function({ journalId, accountId, amount,
     .update(`${journalId}${accountId}${amount}${prevHash}`)
     .digest('hex');
 };
+
+ledgerEntrySchema.add({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
+});
+ledgerEntrySchema.plugin(companyScope);
 
 export default mongoose.model('LedgerEntry', ledgerEntrySchema);

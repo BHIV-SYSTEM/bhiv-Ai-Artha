@@ -18,7 +18,7 @@ import {
   protect,
   clearBlackholeCookie,
 } from './middleware/auth.js';
-import { login, signup, logout } from './controllers/auth.controller.js';
+import { login, logout } from './controllers/auth.controller.js';
 
 import {
   helmetConfig,
@@ -83,11 +83,9 @@ import tantraRoutes from './routes/tantra.routes.js';
 import governanceRoutes from './routes/governance.routes.js';
 import financialRuntimeRoutes from './routes/financialRuntime.routes.js';
 import mitraRoutes from './routes/mitra.routes.js';
-import niyantranRoutes from './routes/niyantran.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
 import dealerRoutes from './routes/dealer.routes.js';
 import salesAgentRoutes from './routes/salesAgent.routes.js';
-import storefrontRoutes from './routes/storefront.routes.js';
 import observabilityService from './services/observability.service.js';
 import bankingService from './services/banking.service.js';
 import auditService from './services/audit.service.js';
@@ -285,7 +283,17 @@ app.get('/api/v1/auth/test', (req, res) => {
 
 /** Local password login — returns JWT for `Authorization: Bearer`. */
 app.post('/api/v1/auth/login', authPasswordLimiter, login);
-app.post('/api/v1/auth/signup', authSignupLimiter, signup);
+/**
+ * Public signup is disabled: accounts are created by an admin (or sub-admin)
+ * via POST /api/v1/users. Kept as an explicit 403 so stale clients get a
+ * clear message instead of a 404.
+ */
+app.post('/api/v1/auth/signup', authSignupLimiter, (_req, res) => {
+  res.status(403).json({
+    success: false,
+    message: 'Registration is closed. Contact your administrator for an account.',
+  });
+});
 app.post('/api/v1/auth/logout', protect, logout);
 
 app.get('/api/v1/auth/me', protect, (req, res) => {
@@ -436,11 +444,9 @@ app.use('/api/v1/tantra', tantraRoutes);
 app.use('/api/v1/governance', governanceRoutes);
 app.use('/api/v1/financial-runtime', financialRuntimeRoutes);
 app.use('/api/v1/mitra', mitraRoutes);
-app.use('/api/v1/niyantran', niyantranRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/dealers', dealerRoutes);
 app.use('/api/v1/sales-agents', salesAgentRoutes);
-app.use('/api/v1/storefront', storefrontRoutes);
 
 // SETU callback webhook endpoint (delegated to setuDispatch service)
 // Protected by HMAC signature verification for external webhook security
@@ -603,5 +609,16 @@ const gracefulShutdown = async (signal) => {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Keep the process alive on async failures: log them (winston -> logs/error.log)
+// instead of letting Node's default behaviour kill the server.
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  logger.error(`Unhandled promise rejection (kept alive): ${err.message}`, { stack: err.stack });
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error(`Uncaught exception (kept alive): ${err.message}`, { stack: err.stack });
+});
 
 export default app;

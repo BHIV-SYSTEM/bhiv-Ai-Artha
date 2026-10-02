@@ -1,18 +1,35 @@
 import mongoose from 'mongoose';
+import companyScope from '../utils/companyScope.js';
 
 const companySettingsSchema = new mongoose.Schema({
+  // Workspace that owns this settings document (Company._id for company
+  // members, User._id for a personal workspace). Legacy singleton documents
+  // created before scoping have a string _id and null companyId.
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+  },
+
   // Basic Info
   companyName: {
     type: String,
     required: true,
+    default: 'My Company',
   },
+  // Form-facing alias of companyName (Company settings tab)
+  name: String,
   legalName: String,
-  
-  // Address
+
+  // Address (line1/line2/pincode are used by the settings form;
+  // street/postalCode kept for backward compatibility)
   address: {
+    line1: String,
+    line2: String,
     street: String,
     city: String,
     state: String,
+    pincode: String,
     postalCode: String,
     country: {
       type: String,
@@ -52,7 +69,16 @@ const companySettingsSchema = new mongoose.Schema({
   },
   cin: String, // Corporate Identification Number
   
-  // Bank Details
+  // Bank Details (settings form)
+  bankDetails: {
+    accountName: String,
+    accountNumber: String,
+    bankName: String,
+    ifscCode: String,
+    branch: String,
+  },
+
+  // Bank Accounts (legacy array form)
   bankAccounts: [{
     bankName: String,
     accountNumber: String,
@@ -120,16 +146,24 @@ const companySettingsSchema = new mongoose.Schema({
     },
   },
   
+  // Invoice Settings (settings form)
+  invoiceSettings: {
+    prefix: { type: String, default: 'INV' },
+    nextNumber: { type: Number, default: 1 },
+    termsAndConditions: String,
+    notes: String,
+  },
+
+  // Financial year (settings form)
+  financialYear: {
+    startMonth: { type: Number, default: 4 },
+    startDay: { type: Number, default: 1 },
+  },
+
   // Logo
   logo: {
     filename: String,
     path: String,
-  },
-  
-  // Singleton pattern - only one settings document
-  _id: {
-    type: String,
-    default: 'company_settings',
   },
 }, {
   timestamps: true,
@@ -141,5 +175,12 @@ companySettingsSchema.index({ pan: 1 });
 companySettingsSchema.index({ tan: 1 });
 companySettingsSchema.index({ 'gstSettings.isRegistered': 1 });
 companySettingsSchema.index({ 'tdsSettings.isTANActive': 1 });
+// One settings document per workspace (legacy singleton has null companyId)
+companySettingsSchema.index(
+  { companyId: 1 },
+  { unique: true, partialFilterExpression: { companyId: { $type: 'objectId' } } }
+);
+
+companySettingsSchema.plugin(companyScope);
 
 export default mongoose.model('CompanySettings', companySettingsSchema);

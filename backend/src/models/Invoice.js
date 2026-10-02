@@ -1,5 +1,8 @@
 import mongoose from 'mongoose';
+import './Counter.js';
 import Decimal from 'decimal.js';
+import companyScope from '../utils/companyScope.js';
+import companySettingsService from '../services/companySettings.service.js';
 
 // Decimal validation helper
 const validateDecimal = {
@@ -18,7 +21,6 @@ const validateDecimal = {
 const invoiceSchema = new mongoose.Schema({
   invoiceNumber: {
     type: String,
-    unique: true,
   },
   customerName: {
     type: String,
@@ -249,7 +251,17 @@ invoiceSchema.pre('save', async function(next) {
       const date = new Date();
       const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
       const seq = await Counter.getNextSequence('invoice', { date: dateStr });
-      this.invoiceNumber = `INV-${dateStr}-${String(seq).padStart(4, '0')}`;
+      let prefix = 'INV';
+      try {
+        const settings = await companySettingsService.getSettings();
+        const configured = String(settings?.invoiceSettings?.prefix || '')
+          .trim()
+          .replace(/[^A-Za-z0-9_-]/g, '');
+        if (configured) prefix = configured;
+      } catch (err) {
+        // Settings unavailable - keep the default prefix.
+      }
+      this.invoiceNumber = `${prefix}-${dateStr}-${String(seq).padStart(4, '0')}`;
     }
     
     // Sync items and lines
@@ -296,5 +308,17 @@ invoiceSchema.pre('save', async function(next) {
 });
 
 
+
+invoiceSchema.add({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
+});
+invoiceSchema.plugin(companyScope);
+// Unique per workspace — different accounts may hold the same invoice number.
+invoiceSchema.index({ companyId: 1, invoiceNumber: 1 }, { unique: true });
 
 export default mongoose.model('Invoice', invoiceSchema);

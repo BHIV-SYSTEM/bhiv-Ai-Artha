@@ -2,7 +2,7 @@ import Decimal from 'decimal.js';
 import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
 import Expense from '../models/Expense.js';
-import CompanySettings from '../models/CompanySettings.js';
+import companySettingsService from './companySettings.service.js';
 import ledgerService from './ledger.service.js';
 import ChartOfAccounts from '../models/ChartOfAccounts.js';
 import logger from '../config/logger.js';
@@ -46,7 +46,7 @@ class ExpenseService {
       const hasSupplierState = supplierState && supplierState.trim().length > 0;
 
       if (hasGSTRate && hasSupplierState) {
-        const settings = await CompanySettings.findById('company_settings');
+        const settings = await companySettingsService.getSettings();
         const companyState = settings?.address?.state || (settings?.gstin ? settings.gstin.substring(0, 2) : null);
 
         if (companyState) {
@@ -481,7 +481,7 @@ class ExpenseService {
       const hasSupplierState = expense.supplierState && expense.supplierState.trim().length > 0;
 
       if (hasGSTRate && hasSupplierState) {
-        const settings = await CompanySettings.findById('company_settings').session(session);
+        const settings = await companySettingsService.getSettings({ session });
         const companyState = settings?.address?.state || (settings?.gstin ? settings.gstin.substring(0, 2) : null);
 
         if (companyState) {

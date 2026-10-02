@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Mail, Lock, AlertCircle } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
@@ -100,10 +100,7 @@ const Login = () => {
       </form>
 
       <p className="mt-8 text-center text-xs text-muted-foreground">
-        New here?{' '}
-        <Link to="/signup" className="text-primary hover:underline font-medium">
-          Create account
-        </Link>
+        Accounts are created by your administrator. Contact them for access.
       </p>
     </div>
   );

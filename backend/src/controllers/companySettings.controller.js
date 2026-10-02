@@ -10,7 +10,7 @@ export const getSettings = async (req, res) => {
     
     res.json({
       success: true,
-      data: settings,
+      data: companySettingsService.toClientShape(settings),
     });
   } catch (error) {
     logger.error('Get settings error:', error);
@@ -30,7 +30,7 @@ export const updateSettings = async (req, res) => {
     
     res.json({
       success: true,
-      data: settings,
+      data: companySettingsService.toClientShape(settings),
     });
   } catch (error) {
     logger.error('Update settings error:', error);

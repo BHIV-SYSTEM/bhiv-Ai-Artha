@@ -1,6 +1,6 @@
 import Invoice from '../models/Invoice.js';
 import Expense from '../models/Expense.js';
-import CompanySettings from '../models/CompanySettings.js';
+import companySettingsService from './companySettings.service.js';
 import GSTReturn from '../models/GSTReturn.js';
 import Decimal from 'decimal.js';
 import logger from '../config/logger.js';
@@ -21,7 +21,10 @@ class GSTFilingService {
       const startDate = new Date(`${year}-${month}-01`);
       const endDate = new Date(year, parseInt(month), 0);
 
-      const settings = await CompanySettings.findById('company_settings').lean();
+      const settings = await companySettingsService.getSettings();
+      if (!settings?.gstin) {
+        throw new Error('Company GSTIN not configured');
+      }
       const companyState = settings?.address?.state || settings?.gstin?.substring(0, 2);
 
       logger.info(`Generating GSTR-1 packet for ${period}`);
@@ -142,7 +145,27 @@ class GSTFilingService {
         entityId: randomUUID(),
         details: { period, totalTaxCollected: packet.summary.totalTaxCollected },
       });
-      
+
+      // Upsert the GSTReturn doc so filing can reference/track this period
+      const returnDoc = await GSTReturn.findOneAndUpdate(
+        { returnType: 'GSTR1', 'period.year': parseInt(year, 10), 'period.month': parseInt(month, 10) },
+        {
+          $set: {
+            outwardSupplies: {
+              taxable: packet.summary.totalTaxableValue,
+              cgst: packet.summary.totalCGST,
+              sgst: packet.summary.totalSGST,
+              igst: packet.summary.totalIGST,
+              cess: '0',
+            },
+            jsonData: packet,
+          },
+          $setOnInsert: { gstin: settings.gstin, status: 'draft' },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      packet.returnId = returnDoc._id;
+
       return packet;
     } catch (error) {
       logger.error('Generate GSTR-1 packet error:', error);
@@ -158,7 +181,10 @@ class GSTFilingService {
       const [year, month] = period.split('-');
       const startDate = new Date(`${year}-${month}-01`);
       const endDate = new Date(year, parseInt(month), 0);
-      const settings = await CompanySettings.findById('company_settings').lean();
+      const settings = await companySettingsService.getSettings();
+      if (!settings?.gstin) {
+        throw new Error('Company GSTIN not configured');
+      }
       const companyState = settings?.address?.state || settings?.gstin?.substring(0, 2);
 
       logger.info(`Generating GSTR-3B packet for ${period}`);
@@ -304,7 +330,41 @@ class GSTFilingService {
         entityId: randomUUID(),
         details: { period, netPayable: packet.netLiability.totalPayable },
       });
-      
+
+      // Upsert the GSTReturn doc so filing can reference/track this period
+      const returnDoc = await GSTReturn.findOneAndUpdate(
+        { returnType: 'GSTR3B', 'period.year': parseInt(year, 10), 'period.month': parseInt(month, 10) },
+        {
+          $set: {
+            outwardSupplies: {
+              taxable: packet.outwardSupplies.taxableValue,
+              cgst: packet.outwardSupplies.cgst,
+              sgst: packet.outwardSupplies.sgst,
+              igst: packet.outwardSupplies.igst,
+              cess: '0',
+            },
+            inwardSupplies: {
+              taxable: packet.inwardSupplies.taxableValue,
+              cgst: packet.inwardSupplies.cgst,
+              sgst: packet.inwardSupplies.sgst,
+              igst: packet.inwardSupplies.igst,
+              itc: packet.inwardSupplies.totalInputCredit,
+            },
+            netTaxLiability: {
+              cgst: packet.netLiability.cgst,
+              sgst: packet.netLiability.sgst,
+              igst: packet.netLiability.igst,
+              cess: '0',
+              total: packet.netLiability.totalPayable,
+            },
+            jsonData: packet,
+          },
+          $setOnInsert: { gstin: settings.gstin, status: 'draft' },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      packet.returnId = returnDoc._id;
+
       return packet;
     } catch (error) {
       logger.error('Generate GSTR-3B packet error:', error);
@@ -423,6 +483,41 @@ class GSTFilingService {
       const gstr1DueDate = new Date(nextMonth.getFullYear(), nextMonth.getMonth(), 11);
       const gstr3bDueDate = new Date(nextMonth.getFullYear(), nextMonth.getMonth(), 20);
 
+      // Actual return docs for this period (source of truth for statuses)
+      const returnsRaw = await GSTReturn.find({
+        'period.year': parseInt(year, 10),
+        'period.month': parseInt(month, 10),
+      }).sort({ returnType: 1, filedDate: -1 }).lean();
+
+      const deriveStatus = (doc, dueDate) => {
+        if (doc) {
+          if (doc.status === 'filed' || doc.status === 'revised') return 'filed';
+          return new Date(dueDate) < new Date() ? 'overdue' : 'pending';
+        }
+        return new Date(dueDate) < new Date() ? 'overdue' : 'not_filed';
+      };
+
+      const monthLabel = new Date(year, parseInt(month) - 1).toLocaleString('default', { month: 'short' });
+      const returnRows = returnsRaw.map((doc) => {
+        const isGSTR1 = doc.returnType === 'GSTR1';
+        const out = doc.outwardSupplies || {};
+        const net = doc.netTaxLiability || {};
+        const outputTax = isGSTR1
+          ? new Decimal(out.cgst || 0).plus(out.sgst || 0).plus(out.igst || 0).toString()
+          : new Decimal(net.total || 0).toString();
+        return {
+          _id: doc._id,
+          type: isGSTR1 ? 'GSTR-1' : 'GSTR-3B',
+          period: `${monthLabel} ${year}`,
+          dueDate: (isGSTR1 ? gstr1DueDate : gstr3bDueDate).toISOString(),
+          filedDate: doc.filedDate ? new Date(doc.filedDate).toISOString() : null,
+          status: doc.status === 'draft' ? 'pending' : doc.status,
+          outputTax: parseFloat(outputTax) || 0,
+          acknowledgementNumber: doc.acknowledgementNumber || null,
+          portalUrl: doc.portalUrl || null,
+        };
+      });
+
       return {
         summary: {
           outputGST: parseFloat(outputGST.toString()),
@@ -435,8 +530,14 @@ class GSTFilingService {
           period: `${new Date(year, parseInt(month) - 1).toLocaleString('default', { month: 'long' })} ${year}`,
           gstr1DueDate: gstr1DueDate.toISOString(),
           gstr3bDueDate: gstr3bDueDate.toISOString(),
-          gstr1Status: 'not_filed',
-          gstr3bStatus: 'not_filed',
+          gstr1Status: deriveStatus(
+            returnsRaw.find((r) => r.returnType === 'GSTR1'),
+            gstr1DueDate
+          ),
+          gstr3bStatus: deriveStatus(
+            returnsRaw.find((r) => r.returnType === 'GSTR3B'),
+            gstr3bDueDate
+          ),
         },
         monthlyData,
         invoicesSummary: {
@@ -456,10 +557,7 @@ class GSTFilingService {
             tax: 0,
           },
         },
-        returns: await GSTReturn.find({
-          'period.year': year.toString(),
-          'period.month': month.toString().padStart(2, '0'),
-        }).sort({ filedDate: -1 }).lean(),
+        returns: returnRows,
       };
     } catch (error) {
       logger.error('Get GST summary error:', error);

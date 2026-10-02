@@ -22,6 +22,16 @@ router
     updateSettings
   );
 
+// The frontend settings tab calls /settings/company — keep it as an alias.
+router
+  .route('/company')
+  .get(getSettings)
+  .put(
+    authorize('admin'),
+    auditLogger('settings.updated', 'CompanySettings'),
+    updateSettings
+  );
+
 router.route('/financial-year').get(getCurrentFinancialYear);
 
 export default router;

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import './Counter.js';
 import Decimal from 'decimal.js';
 import { randomUUID } from 'crypto';
 

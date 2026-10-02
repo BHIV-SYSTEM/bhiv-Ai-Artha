@@ -11,6 +11,7 @@ import ChartOfAccounts from '../src/models/ChartOfAccounts.js';
 import chartOfAccountsService from '../src/services/chartOfAccounts.service.js';
 import ledgerService from '../src/services/ledger.service.js';
 import logger from '../src/config/logger.js';
+import { runWithScope } from '../src/utils/companyScope.js';
 
 dotenv.config();
 
@@ -77,15 +78,38 @@ const seedComprehensive = async () => {
       }
     }
 
-    // 2. Ensure Company Settings
-    const companyExists = await CompanySettings.findById('company_settings');
-    if (!companyExists) {
-      try {
+    // 2. Ensure Users
+    let admin = await User.findOne({ email: 'admin@artha.local' });
+    if (!admin) {
+      admin = await User.create({ email: 'admin@artha.local', password: 'Admin@123456', name: 'Admin User', role: 'admin' });
+    }
+    let accountant = await User.findOne({ email: 'accountant@artha.local' });
+    if (!accountant) {
+      accountant = await User.create({ email: 'accountant@artha.local', password: 'Accountant@123456', name: 'Rajesh Kumar', role: 'accountant', companyId: admin._id });
+    } else if (!accountant.companyId) {
+      accountant.companyId = admin._id;
+      await accountant.save();
+    }
+    logger.info('Users ready');
+
+    // 3. Ensure Company Settings (belongs to the admin's workspace)
+    try {
+      const settingsExists = await CompanySettings.findOne({ companyId: admin._id });
+      if (!settingsExists) {
         await CompanySettings.create({
-          _id: 'company_settings',
+          companyId: admin._id,
           companyName: 'Bright Connection Pvt Ltd',
+          name: 'Bright Connection Pvt Ltd',
           legalName: 'Bright Connection Private Limited',
-          address: { street: '42 Business Tower', city: 'New Delhi', state: 'DL', postalCode: '110001', country: 'India' },
+          address: {
+            line1: '42 Business Tower',
+            street: '42 Business Tower',
+            city: 'New Delhi',
+            state: 'DL',
+            pincode: '110001',
+            postalCode: '110001',
+            country: 'India',
+          },
           phone: '+91-11-98765432',
           email: 'info@brightconnection.in',
           gstin: '07AABCB1234F1Z5',
@@ -95,21 +119,16 @@ const seedComprehensive = async () => {
           tdsSettings: { isTANActive: true, defaultTDSRate: 10, autoCalculateTDS: true },
         });
         logger.info('Company settings created');
-      } catch (e) {
-        logger.warn(`Company settings: ${e.message}`);
       }
+    } catch (e) {
+      logger.warn(`Company settings: ${e.message}`);
     }
 
-    // 3. Ensure Users
-    let admin = await User.findOne({ email: 'admin@artha.local' });
-    if (!admin) {
-      admin = await User.create({ email: 'admin@artha.local', password: 'Admin@123456', name: 'Admin User', role: 'admin' });
-    }
-    let accountant = await User.findOne({ email: 'accountant@artha.local' });
-    if (!accountant) {
-      accountant = await User.create({ email: 'accountant@artha.local', password: 'Accountant@123456', name: 'Rajesh Kumar', role: 'accountant' });
-    }
-    logger.info('Users ready');
+    // ─── All demo data below is stamped into the admin's workspace so
+    // every other account starts from zero. ─────────────────────────────
+    await runWithScope(
+      { workspace: admin._id, userId: admin._id, role: 'admin', crossCompany: false },
+      async () => {
 
     // 4. Get accounts (with fallbacks)
     const arAccount = await ChartOfAccounts.findOne({ code: '1100' }) || await ChartOfAccounts.findOne({ type: 'Asset' });
@@ -464,7 +483,7 @@ const seedComprehensive = async () => {
       { date: new Date('2026-01-25'), name: 'Rajesh Consultants', pan: 'ABCPR1234F', section: '194J', nature: 'Professional Fees', amount: 80000, rate: 10, status: 'deposited', quarter: 'Q4', fy: '2025-26' },
       { date: new Date('2026-02-15'), name: 'QuickFix Contractors', pan: 'BCDFQ5678G', section: '194C', nature: 'Contractor Payment', amount: 150000, rate: 1, status: 'deducted', quarter: 'Q4', fy: '2025-26' },
       { date: new Date('2026-03-10'), name: 'Prime Properties', pan: 'CDERP9012H', section: '194I', nature: 'Office Rent', amount: 45000, rate: 10, status: 'deposited', quarter: 'Q1', fy: '2026-27' },
-      { date: new Date('2026-04-20'), name: 'SalesMax Agents', pan: 'DEFAST456J', section: '194H', nature: 'Commission', amount: 60000, rate: 5, status: 'deducted', quarter: 'Q1', fy: '2026-27' },
+      { date: new Date('2026-04-20'), name: 'SalesMax Agents', pan: 'SAGME4561J', section: '194H', nature: 'Commission', amount: 60000, rate: 5, status: 'deducted', quarter: 'Q1', fy: '2026-27' },
       { date: new Date('2026-05-15'), name: 'TechVista Solutions', pan: 'EFGHT7890K', section: '194J', nature: 'Technical Services', amount: 120000, rate: 10, status: 'pending', quarter: 'Q2', fy: '2026-27' },
       { date: new Date('2026-06-30'), name: 'SafeGuard Insurance', pan: 'FGHIU2345L', section: '194A', nature: 'Insurance Commission', amount: 35000, rate: 10, status: 'pending', quarter: 'Q2', fy: '2026-27' },
     ];
@@ -535,6 +554,8 @@ const seedComprehensive = async () => {
     logger.info(`   TDS Entries: ${tdsCount}`);
     logger.info(`   GST Returns: ${gstCount}`);
     logger.info('\nCheck: Dashboard, P&L, Balance Sheet, Expenses, GST, TDS tabs');
+      }
+    );
 
     process.exit(0);
   } catch (error) {

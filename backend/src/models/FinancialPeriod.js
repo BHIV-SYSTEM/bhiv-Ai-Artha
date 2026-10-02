@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
+import companyScope from '../utils/companyScope.js';
 
 const financialPeriodSchema = new mongoose.Schema({
   periodId: {
@@ -147,5 +148,7 @@ financialPeriodSchema.statics.getCurrentMonth = function() {
                   'July', 'August', 'September', 'October', 'November', 'December'];
   return months[now.getMonth()];
 };
+
+financialPeriodSchema.plugin(companyScope);
 
 export default mongoose.model('FinancialPeriod', financialPeriodSchema);

@@ -1,5 +1,41 @@
 import bankStatementService from '../services/bankStatement.service.js';
 import logger from '../config/logger.js';
+import fs from 'fs';
+
+/**
+ * Extract statement metadata from an uploaded file (pre-save preview).
+ * Used to pre-fill the upload form; nothing is persisted.
+ */
+export const extractBankStatementDetails = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please upload a file',
+      });
+    }
+
+    const details = await bankStatementService.extractDetailsFromFile(req.file);
+
+    res.json({
+      success: true,
+      data: details,
+      message: details.detectedFields?.length
+        ? 'Details extracted from file'
+        : 'No details detected — please fill the form manually',
+    });
+  } catch (error) {
+    logger.error('Extract bank statement details error:', error);
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  } finally {
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.promises.unlink(req.file.path).catch(() => {});
+    }
+  }
+};
 
 /**
  * Upload bank statement
@@ -67,6 +103,7 @@ export const getBankStatements = async (req, res) => {
     res.json({
       success: true,
       ...result,
+      data: result.statements,
     });
   } catch (error) {
     logger.error('Get bank statements error:', error);

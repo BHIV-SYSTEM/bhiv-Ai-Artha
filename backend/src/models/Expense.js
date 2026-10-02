@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
+import './Counter.js';
 import Decimal from 'decimal.js';
+import companyScope from '../utils/companyScope.js';
 
 // Decimal validation helper
 const validateDecimal = {
@@ -41,7 +43,6 @@ const receiptSchema = new mongoose.Schema({
 const expenseSchema = new mongoose.Schema({
   expenseNumber: {
     type: String,
-    unique: true,
   },
   date: {
     type: Date,
@@ -172,5 +173,17 @@ expenseSchema.pre('save', async function(next) {
   }
   next();
 });
+
+expenseSchema.add({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
+});
+expenseSchema.plugin(companyScope);
+// Unique per workspace — different accounts may hold the same expense number.
+expenseSchema.index({ companyId: 1, expenseNumber: 1 }, { unique: true });
 
 export default mongoose.model('Expense', expenseSchema);

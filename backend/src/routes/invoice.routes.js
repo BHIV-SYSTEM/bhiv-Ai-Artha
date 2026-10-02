@@ -4,6 +4,8 @@ import {
   createInvoice,
   getInvoices,
   getInvoice,
+  getSharedInvoice,
+  getSharedInvoices,
   updateInvoice,
   sendInvoice,
   recordPayment,
@@ -50,6 +52,9 @@ router.use(protect);
 
 // Routes
 router.route('/stats').get(cacheMiddleware(900), getInvoiceStats);
+
+router.route('/shared').get(getSharedInvoices);
+router.route('/:id/shared').get(getSharedInvoice);
 
 router
   .route('/')

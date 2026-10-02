@@ -4,6 +4,8 @@ import TallyOutstanding from '../models/TallyOutstanding.js';
 import TallyVoucher from '../models/TallyVoucher.js';
 import TallySyncRun from '../models/TallySyncRun.js';
 import { bridgeTallyRecords } from '../services/tallyToArthaBridge.service.js';
+import { runWithScope } from '../utils/companyScope.js';
+import { resolveWorkspace } from '../controllers/tallyIngest.controller.js';
 
 /**
  * tallyAdapter.service — ARTHA-side financial normalization.
@@ -181,7 +183,21 @@ async function upsertVouchers(records, { company, traceId, syncRunId }) {
  * Full sync run: companies → parties → outstanding → vouchers.
  * Records a TallySyncRun evidence row (mirrors Setu-Aman RUNTIME_EVIDENCE).
  */
-async function runSync({ company, fromDate, toDate } = {}) {
+/**
+ * Sync entry point. Runs persistence + bridge inside the connector's
+ * workspace scope so raw Tally* snapshots and bridged ARTHA records get
+ * companyId stamped — without a scope they are invisible to every
+ * company-scoped query ("Sync Now does nothing").
+ */
+async function runSync(args = {}) {
+  const workspace = await resolveWorkspace(companyName(args.company));
+  return runWithScope(
+    { workspace, userId: null, role: 'system', crossCompany: false },
+    () => runSyncScoped(args),
+  );
+}
+
+async function runSyncScoped({ company, fromDate, toDate } = {}) {
   const tenant = tenantId();
   const comp = companyName(company);
   const traceId = `tally-sync-${Date.now()}`;

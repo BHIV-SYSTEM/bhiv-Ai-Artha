@@ -26,10 +26,13 @@ import {
 } from '../../components/common';
 import api from '../../services/api';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { useCan } from '../../utils/permissions';
 
 const InvoiceList = () => {
   const navigate = useNavigate();
+  const can = useCan();
   const [invoices, setInvoices] = useState([]);
+  const [sharedInvoices, setSharedInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -43,6 +46,13 @@ const InvoiceList = () => {
     try {
       const response = await api.get('/invoices');
       setInvoices(response.data.data || []);
+      try {
+        const shared = await api.get('/invoices/shared');
+        setSharedInvoices(shared.data.data || []);
+      } catch (sharedError) {
+        console.error('Failed to fetch shared invoices:', sharedError);
+        setSharedInvoices([]);
+      }
     } catch (error) {
       console.error('Failed to fetch invoices:', error);
       setInvoices([]);
@@ -90,9 +100,11 @@ const InvoiceList = () => {
         title="Invoices"
         description="Manage your invoices and track payments"
         action={
-          <Button onClick={() => navigate('/invoices/new')} icon={Plus}>
-            New Invoice
-          </Button>
+          can(['admin', 'accountant']) && (
+            <Button onClick={() => navigate('/invoices/new')} icon={Plus}>
+              New Invoice
+            </Button>
+          )
         }
       />
 
@@ -128,8 +140,8 @@ const InvoiceList = () => {
             icon={FileText}
             title="No invoices found"
             description="Create your first invoice to get started with billing."
-            actionLabel="Create Invoice"
-            onAction={() => navigate('/invoices/new')}
+            actionLabel={can(['admin', 'accountant']) ? 'Create Invoice' : undefined}
+            onAction={can(['admin', 'accountant']) ? () => navigate('/invoices/new') : undefined}
           />
         </Card>
       ) : (
@@ -187,16 +199,69 @@ const InvoiceList = () => {
                       >
                         <Eye className="w-4 h-4 text-muted-foreground" />
                       </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/invoices/${invoice._id}/edit`);
-                        }}
-                        className="p-1.5 hover:bg-muted rounded-lg"
-                      >
-                        <Edit className="w-4 h-4 text-muted-foreground" />
-                      </button>
+                      {can(['admin', 'accountant']) && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/invoices/${invoice._id}/edit`);
+                          }}
+                          className="p-1.5 hover:bg-muted rounded-lg"
+                        >
+                          <Edit className="w-4 h-4 text-muted-foreground" />
+                        </button>
+                      )}
                     </div>
+                  </Table.Cell>
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table>
+        </Card>
+      )}
+
+      {/* Invoices shared from other accounts */}
+      {sharedInvoices.length > 0 && (
+        <Card padding={false}>
+          <div className="px-4 py-3 border-b border-border font-semibold text-foreground">
+            Invoices shared with me
+          </div>
+          <Table>
+            <Table.Header>
+              <Table.Row>
+                <Table.Head>Invoice #</Table.Head>
+                <Table.Head>Customer</Table.Head>
+                <Table.Head>Amount</Table.Head>
+                <Table.Head>Status</Table.Head>
+                <Table.Head>Invoice Date</Table.Head>
+                <Table.Head className="w-20">Actions</Table.Head>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {sharedInvoices.map((invoice) => (
+                <Table.Row
+                  key={invoice._id}
+                  onClick={() => navigate(`/invoices/${invoice._id}?shared=1`)}
+                  className="cursor-pointer"
+                >
+                  <Table.Cell>
+                    <span className="font-medium text-blue-600">{invoice.invoiceNumber}</span>
+                  </Table.Cell>
+                  <Table.Cell>{invoice.customerName || '-'}</Table.Cell>
+                  <Table.Cell className="font-semibold">
+                    {formatCurrency(invoice.totalAmount)}
+                  </Table.Cell>
+                  <Table.Cell>{getStatusBadge(invoice.status)}</Table.Cell>
+                  <Table.Cell>{formatDate(invoice.invoiceDate)}</Table.Cell>
+                  <Table.Cell>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/invoices/${invoice._id}?shared=1`);
+                      }}
+                      className="p-1.5 hover:bg-muted rounded-lg"
+                    >
+                      <Eye className="w-4 h-4 text-muted-foreground" />
+                    </button>
                   </Table.Cell>
                 </Table.Row>
               ))}

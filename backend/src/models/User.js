@@ -33,8 +33,16 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['admin', 'accountant', 'viewer'],
+    enum: ['admin', 'sub_admin', 'accountant', 'viewer'],
     default: 'viewer',
+  },
+  // Client company this user belongs to. Null = personal workspace
+  // (user sees only data they create themselves - starts from zero).
+  // Super admins (role: 'admin') normally have no company.
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
   },
   isActive: {
     type: Boolean,
@@ -56,6 +64,7 @@ const userSchema = new mongoose.Schema({
 
 userSchema.index({ role: 1 });
 userSchema.index({ isActive: 1 });
+userSchema.index({ companyId: 1 });
 userSchema.index({ lastLogin: -1 });
 userSchema.index({ resetPasswordExpire: 1 }, { expireAfterSeconds: 0 });
 

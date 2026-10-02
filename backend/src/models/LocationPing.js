@@ -83,8 +83,8 @@ const locationPingSchema = new mongoose.Schema({
   },
   source: {
     type: String,
-    enum: ['niyantran-app', 'browser', 'manual', 'connector'],
-    default: 'niyantran-app',
+    enum: ['mobile', 'browser', 'manual', 'connector'],
+    default: 'mobile',
   },
 }, {
   timestamps: true,
