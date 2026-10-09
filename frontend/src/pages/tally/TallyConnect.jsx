@@ -18,6 +18,7 @@ import {
   EmptyState,
 } from '../../components/common';
 import api from '../../services/api';
+import toast from 'react-hot-toast';
 import { formatCurrency, formatDate } from '../../utils/formatters';
 import { useCan } from '../../utils/permissions';
 
@@ -227,6 +228,20 @@ const TallyConnect = () => {
     }
   };
 
+  const revokeCreds = async () => {
+    const confirmed = window.confirm(
+      'Revoke the connector credentials? Data pushed with these keys will be rejected until new keys are generated.'
+    );
+    if (!confirmed) return;
+    try {
+      await api.post('/tally-connect/credentials/revoke');
+      setCreds(null);
+      toast.success('Connector credentials revoked');
+    } catch (err) {
+      setError(err?.response?.data?.message || 'Could not revoke credentials');
+    }
+  };
+
   const overdueTotal = outstanding
     .filter((o) => o.daysOverdue > 0)
     .reduce((sum, o) => sum + parseFloat(o.balance || 0), 0);
@@ -272,9 +287,14 @@ const TallyConnect = () => {
         <Card className="p-4">
           <div className="flex items-center justify-between mb-1">
             <h3 className="text-lg font-semibold">Connect this account to the connector</h3>
-            <Button variant="secondary" onClick={rotateCreds}>
-              Regenerate keys
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" onClick={rotateCreds}>
+                Regenerate keys
+              </Button>
+              <Button variant="danger" onClick={revokeCreds}>
+                Revoke
+              </Button>
+            </div>
           </div>
           <p className="text-xs text-muted-foreground mb-3">
             Put these in the connector&apos;s .env (CLOUD_URL, CLOUD_API_KEY, CLOUD_HMAC_SECRET).

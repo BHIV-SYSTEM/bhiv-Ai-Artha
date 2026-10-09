@@ -25,9 +25,11 @@ import {
 import toast from 'react-hot-toast';
 import { PageHeader, Card, Button } from '../../components/common';
 import { tallyService } from '../../services';
+import SmartUpload from '../upload/SmartUpload';
 
 const TABS = [
   { id: 'import', label: 'Import Data', icon: Upload },
+  { id: 'smart', label: 'Smart Upload', icon: Layers },
   { id: 'export', label: 'Export Data', icon: Download },
   { id: 'history', label: 'Import History', icon: Clock },
 ];
@@ -732,6 +734,7 @@ export default function DataIngestion() {
       </div>
 
       {activeTab === 'import' && renderImportTab()}
+      {activeTab === 'smart' && <SmartUpload embedded />}
       {activeTab === 'export' && renderExportTab()}
       {activeTab === 'history' && renderHistoryTab()}
     </div>

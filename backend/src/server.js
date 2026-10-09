@@ -67,6 +67,7 @@ import healthRoutes from './routes/health.routes.js';
 import usersRoutes from './routes/users.routes.js';
 import bankStatementRoutes from './routes/bankStatement.routes.js';
 import smartUploadRoutes from './routes/smartUpload.routes.js';
+import ingestRoutes from './routes/ingest.routes.js';
 import signalRoutes from './routes/signal.routes.js';
 import complianceRoutes from './routes/compliance.routes.js';
 import runtimeRoutes from './routes/runtime.routes.js';
@@ -86,6 +87,7 @@ import mitraRoutes from './routes/mitra.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
 import dealerRoutes from './routes/dealer.routes.js';
 import salesAgentRoutes from './routes/salesAgent.routes.js';
+import setuIngestRoutes from './routes/setuIngest.routes.js';
 import observabilityService from './services/observability.service.js';
 import bankingService from './services/banking.service.js';
 import auditService from './services/audit.service.js';
@@ -352,8 +354,8 @@ app.get('/api/v1/push/vapid-key', (req, res) => {
   res.json({ success: true, data: { publicKey: key } });
 });
 
-/** Push diagnostic status — check if push pipeline is healthy */
-app.get('/api/v1/push/status', async (req, res) => {
+/** Push diagnostic status — authenticated; reports pipeline health */
+app.get('/api/v1/push/status', protect, async (req, res) => {
   try {
     const pushNotificationService = (await import('./services/pushNotification.service.js')).default;
     const DeviceToken = (await import('./models/DeviceToken.js')).default;
@@ -379,8 +381,8 @@ app.get('/api/v1/push/status', async (req, res) => {
   }
 });
 
-/** Test push notification — sends a test notification to all subscribers */
-app.post('/api/v1/push/test', async (req, res) => {
+/** Test push notification — authenticated only; sends a test notification to all subscribers */
+app.post('/api/v1/push/test', protect, async (req, res) => {
   try {
     const pushNotificationService = (await import('./services/pushNotification.service.js')).default;
 
@@ -430,6 +432,7 @@ app.use('/api/v1/database', databaseRoutes);
 app.use('/api/v1/users', usersRoutes);
 app.use('/api/v1/statements', bankStatementRoutes);
 app.use('/api/v1/upload', smartUploadRoutes);
+app.use('/api/v1/ingest', ingestRoutes);
 app.use('/api/v1/signals', signalRoutes);
 app.use('/api/v1/runtime', runtimeRoutes);
 app.use('/api/v1/trace', traceRoutes);
@@ -517,6 +520,9 @@ app.get('/api/v1/setu/stats', protect, async (req, res) => {
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
+
+// SETU event ingestion (HMAC-signed order-to-finance events)
+app.use('/api/v1/setu/ingest', setuIngestRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Route not found' });

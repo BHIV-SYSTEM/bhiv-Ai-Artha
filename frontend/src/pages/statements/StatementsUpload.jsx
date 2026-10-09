@@ -16,14 +16,16 @@ import {
   ProgressSubmitButton,
 } from '../../components/common';
 
+// Only bank + account identity are business-essential; the rest are
+// auto-derived from the statement by the server when left empty.
 const uploadSchema = z.object({
   accountNumber: z.string().min(1, 'Account number is required'),
   bankName: z.string().min(1, 'Bank name is required'),
-  accountHolderName: z.string().min(1, 'Account holder name is required'),
-  startDate: z.string().min(1, 'Start date is required'),
-  endDate: z.string().min(1, 'End date is required'),
-  openingBalance: z.string().min(1, 'Opening balance is required'),
-  closingBalance: z.string().min(1, 'Closing balance is required'),
+  accountHolderName: z.string().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  openingBalance: z.string().optional(),
+  closingBalance: z.string().optional(),
 });
 
 const FIELD_LABELS = {
@@ -96,7 +98,11 @@ const StatementsUpload = () => {
     setExtracting(true);
     setAutoFilled([]);
     try {
-      const details = await bankStatementService.extract(selectedFile);
+      // api client returns the raw axios response — the payload lives at
+      // response.data.data (this was reading detectedFields off the top
+      // level, so autofill never fired).
+      const response = await bankStatementService.extract(selectedFile);
+      const details = response?.data?.data || null;
       const current = getValues();
       const filled = [];
 
@@ -334,10 +340,8 @@ const StatementsUpload = () => {
                     <p className="mt-1 text-sm text-red-600">{errors.accountNumber.message}</p>
                   )}
                 </div>
-              </div>
-
-              <div>
-                <Label htmlFor="accountHolderName">Account Holder Name *<AutoBadge field="accountHolderName" /></Label>
+              </div>                <div>
+                  <Label htmlFor="accountHolderName">Account Holder Name<AutoBadge field="accountHolderName" /></Label>
                 <Input
                   id="accountHolderName"
                   {...register('accountHolderName')}
@@ -351,7 +355,7 @@ const StatementsUpload = () => {
               {/* Statement Period */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="startDate">Statement Start Date *<AutoBadge field="startDate" /></Label>
+                  <Label htmlFor="startDate">Statement Start Date<AutoBadge field="startDate" /></Label>
                   <Input
                     id="startDate"
                     type="date"
@@ -363,7 +367,7 @@ const StatementsUpload = () => {
                 </div>
 
                 <div>
-                  <Label htmlFor="endDate">Statement End Date *<AutoBadge field="endDate" /></Label>
+                  <Label htmlFor="endDate">Statement End Date<AutoBadge field="endDate" /></Label>
                   <Input
                     id="endDate"
                     type="date"
@@ -378,7 +382,7 @@ const StatementsUpload = () => {
               {/* Balances */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="openingBalance">Opening Balance *<AutoBadge field="openingBalance" /></Label>
+                  <Label htmlFor="openingBalance">Opening Balance<AutoBadge field="openingBalance" /></Label>
                   <Input
                     id="openingBalance"
                     {...register('openingBalance')}
@@ -392,7 +396,7 @@ const StatementsUpload = () => {
                 </div>
 
                 <div>
-                  <Label htmlFor="closingBalance">Closing Balance *<AutoBadge field="closingBalance" /></Label>
+                  <Label htmlFor="closingBalance">Closing Balance<AutoBadge field="closingBalance" /></Label>
                   <Input
                     id="closingBalance"
                     {...register('closingBalance')}
@@ -413,7 +417,7 @@ const StatementsUpload = () => {
                   loading={uploading}
                   icon={Upload}
                   className="flex-1"
-                  hint="Fill all details and attach the statement file (validated on submit)"
+                  hint="Bank name, account number and the file are required — the rest is auto-derived"
                 >
                   Upload Statement
                 </ProgressSubmitButton>
@@ -525,21 +529,23 @@ const StatementsUpload = () => {
               </div>
               <div className="flex justify-between gap-3 sm:block">
                 <dt className="text-muted-foreground">Account Holder</dt>
-                <dd className="font-medium text-foreground">{confirmData.accountHolderName}</dd>
+                <dd className="font-medium text-foreground">{confirmData.accountHolderName || '—'}</dd>
               </div>
               <div className="flex justify-between gap-3 sm:block">
                 <dt className="text-muted-foreground">Statement Period</dt>
                 <dd className="font-medium text-foreground">
-                  {confirmData.startDate} → {confirmData.endDate}
+                  {confirmData.startDate && confirmData.endDate
+                    ? `${confirmData.startDate} → ${confirmData.endDate}`
+                    : '—'}
                 </dd>
               </div>
               <div className="flex justify-between gap-3 sm:block">
                 <dt className="text-muted-foreground">Opening Balance</dt>
-                <dd className="font-medium text-foreground">{confirmData.openingBalance}</dd>
+                <dd className="font-medium text-foreground">{confirmData.openingBalance || '—'}</dd>
               </div>
               <div className="flex justify-between gap-3 sm:block">
                 <dt className="text-muted-foreground">Closing Balance</dt>
-                <dd className="font-medium text-foreground">{confirmData.closingBalance}</dd>
+                <dd className="font-medium text-foreground">{confirmData.closingBalance || '—'}</dd>
               </div>
             </dl>
           )}

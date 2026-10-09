@@ -92,6 +92,7 @@ router
   .route('/')
   .get(cacheMiddleware(300), getExpenses)
   .post(
+    authorize('admin', 'accountant'),
     uploadReceipts.array('receipts', 5),
     handleUploadError,
     expenseValidation,
@@ -104,6 +105,7 @@ router
   .route('/:id')
   .get(cacheMiddleware(600), getExpense)
   .put(
+    authorize('admin', 'accountant'),
     uploadReceipts.array('receipts', 5),
     handleUploadError,
     validate,

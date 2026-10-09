@@ -1,13 +1,19 @@
 import express from 'express';
 import { protect } from '../middleware/auth.js';
-import { smartUpload, smartUploadBatch } from '../controllers/smartUpload.controller.js';
-import { ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES } from '../services/documentExtractor.service.js';
+import {
+  ingestFile,
+  listDocuments,
+  getDocument,
+  deleteDocument,
+  getCapabilities,
+} from '../controllers/ingest.controller.js';
+import { ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES, MAX_FILE_SIZE } from '../services/documentExtractor.service.js';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 
-const uploadDir = 'uploads/smart';
+const uploadDir = 'uploads/ingest';
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -17,12 +23,10 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const uniqueSuffix = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
     const ext = path.extname(file.originalname);
-    cb(null, `smart-${uniqueSuffix}${ext}`);
+    cb(null, `ingest-${uniqueSuffix}${ext}`);
   },
 });
 
-// Accepts every type the universal document extractor can read:
-// PDF, images, DOCX, plain text, JSON/XML/HTML, CSV and Excel.
 const fileFilter = (req, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();
   const mimeOk = !file.mimetype || ALLOWED_MIME_TYPES.includes(file.mimetype);
@@ -33,7 +37,7 @@ const fileFilter = (req, file, cb) => {
   }
   cb(
     new Error(
-      `Unsupported file type "${ext || file.mimetype}". Upload images, PDFs, documents, text, CSV, or Excel files.`
+      `Unsupported file type "${ext || file.mimetype}". Allowed types: ${ALLOWED_EXTENSIONS.join(', ')}`
     ),
     false
   );
@@ -42,27 +46,25 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 25 * 1024 * 1024, files: 10 },
+  limits: { fileSize: MAX_FILE_SIZE, files: 1 },
 });
 
 const router = express.Router();
 
 router.use(protect);
 
-router.post('/', upload.single('file'), (err, req, res, next) => {
+const handleUploadError = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ success: false, message: err.message });
   }
   if (err) return res.status(400).json({ success: false, message: err.message });
   next();
-}, smartUpload);
+};
 
-router.post('/batch', upload.array('files', 10), (err, req, res, next) => {
-  if (err instanceof multer.MulterError) {
-    return res.status(400).json({ success: false, message: err.message });
-  }
-  if (err) return res.status(400).json({ success: false, message: err.message });
-  next();
-}, smartUploadBatch);
+router.post('/', upload.single('file'), handleUploadError, ingestFile);
+router.get('/capabilities', getCapabilities);
+router.get('/', listDocuments);
+router.get('/:documentId', getDocument);
+router.delete('/:documentId', deleteDocument);
 
 export default router;

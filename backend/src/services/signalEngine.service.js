@@ -147,7 +147,6 @@ async function dispatchToSetu(payload) {
   const sampadaBody = toSampadaEnvelope(result.payload, {
     correlation_id: process.env.SAMPADA_SETU_CORRELATION_ID,
   });
-  const wireBody = JSON.stringify(sampadaBody);
 
   // Create dispatch record
   // NOTE: SetuDispatch schema uses camelCase fields (signalId, traceId,
@@ -230,6 +229,7 @@ async function dispatchToSetu(payload) {
     // Store delivery evidence as RuntimeProof
     await RuntimeProof.create({
       type: 'SETU_DISPATCH_ATTEMPT',
+      proof_type: 'SETU_DISPATCH_ATTEMPT',
       trace_id: payload.trace_id,
       signal_id: payload.signal_id,
       source_system: 'ARTHA',
@@ -291,6 +291,7 @@ async function dispatchToSetu(payload) {
 
     await RuntimeProof.create({
       type: 'SETU_DISPATCH_ATTEMPT',
+      proof_type: 'SETU_DISPATCH_ATTEMPT',
       trace_id: payload.trace_id,
       signal_id: payload.signal_id,
       source_system: 'ARTHA',

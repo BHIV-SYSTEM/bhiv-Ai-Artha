@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import './Counter.js';
 import Decimal from 'decimal.js';
-import companyScope from '../utils/companyScope.js';
+import companyScope, { getScope } from '../utils/companyScope.js';
 import companySettingsService from '../services/companySettings.service.js';
 
 // Decimal validation helper
@@ -154,6 +154,10 @@ const invoiceSchema = new mongoose.Schema({
     enum: ['draft', 'sent', 'partial', 'paid', 'overdue', 'cancelled'],
     default: 'draft',
   },
+  sentAt: {
+    type: Date,
+    default: null,
+  },
   payments: [{
     amount: {
       type: String,
@@ -250,7 +254,11 @@ invoiceSchema.pre('save', async function(next) {
       const Counter = mongoose.model('Counter');
       const date = new Date();
       const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
-      const seq = await Counter.getNextSequence('invoice', { date: dateStr });
+      const scope = getScope();
+      const wsKey = scope && scope.workspace ? String(scope.workspace) : null;
+      const seq = wsKey
+        ? await Counter.getNextSequence('invoice', { ws: wsKey, date: dateStr }, { date: dateStr })
+        : await Counter.getNextSequence('invoice', { date: dateStr });
       let prefix = 'INV';
       try {
         const settings = await companySettingsService.getSettings();

@@ -3,7 +3,7 @@ import './Counter.js';
 import crypto from 'crypto';
 import Decimal from 'decimal.js';
 import { randomUUID } from 'crypto';
-import companyScope from '../utils/companyScope.js';
+import companyScope, { getScope } from '../utils/companyScope.js';
 
 const journalLineSchema = new mongoose.Schema({
   id: {
@@ -435,7 +435,11 @@ journalEntrySchema.pre('save', async function(next) {
     const Counter = mongoose.model('Counter');
     const date = new Date();
     const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
-    const seq = await Counter.getNextSequence('journalEntry', { date: dateStr });
+    const scope = getScope();
+    const wsKey = scope && scope.workspace ? String(scope.workspace) : null;
+    const seq = wsKey
+      ? await Counter.getNextSequence('journalEntry', { ws: wsKey, date: dateStr }, { date: dateStr })
+      : await Counter.getNextSequence('journalEntry', { date: dateStr });
     this.entryNumber = `JE-${dateStr}-${String(seq).padStart(4, '0')}`;
   }
   

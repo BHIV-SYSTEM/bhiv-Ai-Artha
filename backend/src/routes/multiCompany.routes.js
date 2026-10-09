@@ -6,6 +6,9 @@ const router = express.Router();
 
 router.use(protect);
 
+// Super admin only (enforced in the controller) - technical platform view.
+router.get('/platform-stats', authorize('admin'), multiCompanyController.getPlatformStats);
+
 router.post('/companies', authorize('admin'), multiCompanyController.createCompany);
 router.get('/companies', authorize('admin', 'accountant', 'viewer'), multiCompanyController.getCompanies);
 router.get('/companies/:id', authorize('admin', 'accountant', 'viewer'), multiCompanyController.getCompany);

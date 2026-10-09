@@ -176,13 +176,18 @@ class ChartOfAccountsService {
       { code: '6900', name: 'Miscellaneous Expense', type: 'Expense', subtype: 'Operating Expense', normalBalance: 'debit' },
     ];
 
-    const existingCount = await ChartOfAccounts.countDocuments();
+    // Only count shared (system) accounts: workspace-created custom accounts
+    // must never block seeding of the shared chart.
+    const existingCount = await ChartOfAccounts.countDocuments({ companyId: null });
     if (existingCount > 0) {
       logger.info('Chart of accounts already seeded');
       return { message: 'Chart of accounts already exists', count: existingCount };
     }
 
-    const accounts = await ChartOfAccounts.insertMany(defaultAccounts);
+    // Explicit null keeps seeds shared (no workspace stamping).
+    const accounts = await ChartOfAccounts.insertMany(
+      defaultAccounts.map((account) => ({ ...account, companyId: null }))
+    );
     logger.info(`Seeded ${accounts.length} default accounts`);
 
     return { message: 'Default accounts seeded successfully', count: accounts.length };

@@ -3,6 +3,7 @@ import logger from '../config/logger.js';
 import { signAccessToken } from '../utils/authToken.js';
 import { getBlackholeCookieOptions, clearBlackholeCookie } from '../middleware/auth.js';
 import activationCodeService from '../services/activationCode.service.js';
+import auditService from '../services/audit.service.js';
 
 const COOKIE_NAME = 'blackhole_token';
 
@@ -29,6 +30,22 @@ export const login = async (req, res) => {
     const token = signAccessToken(user);
 
     res.cookie(COOKIE_NAME, token, getCookieOptions());
+
+    // Fire-and-forget: auth must never fail or slow down on audit.
+    auditService.recordLogin({
+      userId: user._id,
+      actor: {
+        userId: user._id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        ip: req.ip,
+        userAgent: req.get('user-agent'),
+      },
+      entityType: 'User',
+      entityId: String(user._id),
+      details: { email: user.email },
+    }).catch(() => {});
 
     return res.json({
       success: true,
@@ -145,5 +162,21 @@ export const signup = async (req, res) => {
 
 export const logout = async (req, res) => {
   clearBlackholeCookie(res);
+  if (req.user?._id) {
+    auditService.recordLogout({
+      userId: req.user._id,
+      actor: {
+        userId: req.user._id,
+        email: req.user.email,
+        name: req.user.name,
+        role: req.user.role,
+        ip: req.ip,
+        userAgent: req.get('user-agent'),
+      },
+      entityType: 'User',
+      entityId: String(req.user._id),
+      details: { email: req.user.email },
+    }).catch(() => {});
+  }
   return res.json({ success: true, message: 'Logged out' });
 };

@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import './Counter.js';
 import Decimal from 'decimal.js';
 import { randomUUID } from 'crypto';
+import { getScope } from '../utils/companyScope.js';
 
 const validateDecimal = {
   validator: function(v) {
@@ -162,7 +163,11 @@ paymentSchema.pre('save', async function(next) {
     const Counter = mongoose.model('Counter');
     const date = new Date();
     const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
-    const seq = await Counter.getNextSequence('payment', { date: dateStr });
+    const scope = getScope();
+    const wsKey = scope && scope.workspace ? String(scope.workspace) : null;
+    const seq = wsKey
+      ? await Counter.getNextSequence('payment', { ws: wsKey, date: dateStr }, { date: dateStr })
+      : await Counter.getNextSequence('payment', { date: dateStr });
     this.paymentReference = `PAYREF-${dateStr}-${String(seq).padStart(4, '0')}`;
   }
   next();

@@ -10,6 +10,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import cacheService from './cache.service.js';
 import { calculateGSTBreakdown, buildGSTValidationError } from './gstEngine.service.js';
+import { buildExpenseJournalLines } from './expenseJournal.service.js';
 import auditService from './audit.service.js';
 import evidenceAutomationService from './evidenceAutomation.service.js';
 import tantraService from './tantra.service.js';
@@ -37,6 +38,16 @@ class ExpenseService {
         ...filtered,
         submittedBy: userId,
       });
+
+      // totalAmount is required by the model, but API callers may send only
+      // amount (+ taxAmount) — derive it instead of surfacing a cast error.
+      // The GST block below overwrites this whenever it recomputes the tax.
+      if (expense.totalAmount === undefined || expense.totalAmount === null || expense.totalAmount === '') {
+        expense.totalAmount = new Decimal(expense.amount || 0)
+          .plus(new Decimal(expense.taxAmount || 0))
+          .toDecimalPlaces(2)
+          .toNumber();
+      }
 
       // Auto-calculate GST if gstRate and supplierState provided
       const gstRate = expense.gstRate;
@@ -531,56 +542,26 @@ class ExpenseService {
         totalAmount = declaredTotalAmount.greaterThan(0)
           ? declaredTotalAmount
           : taxableAmount.plus(declaredTaxAmount);
+
+        // No gstRate here — most often because one invoice carries mixed slabs
+        // (5% + 18%). totalCGST/totalSGST/totalIGST stay at zero on purpose: the
+        // ledger validator demands gstDetails whenever Input CGST/SGST/IGST
+        // accounts appear, and gstDetails can only be derived from a single
+        // statutory rate. So no ITC line is posted and the whole payment — tax
+        // included — lands on the expense account, which always balances.
       }
 
       expense.taxAmount = totalTax.toString();
       expense.totalAmount = totalAmount.toString();
 
-      const lines = [
-        {
-          account: expenseAccount._id,
-          debit: taxableAmount.toString(),
-          credit: '0',
-          description: `${expense.category} expense`,
-        },
-      ];
-
-      if (totalCGST.greaterThan(0)) {
-        lines.push(
-          {
-            account: inputCGST._id,
-            debit: totalCGST.toString(),
-            credit: '0',
-            description: 'Input CGST',
-          },
-        );
-      }
-
-      if (totalSGST.greaterThan(0)) {
-        lines.push(
-          {
-            account: inputSGST._id,
-            debit: totalSGST.toString(),
-            credit: '0',
-            description: 'Input SGST',
-          }
-        );
-      }
-
-      if (totalIGST.greaterThan(0)) {
-        lines.push({
-          account: inputIGST._id,
-          debit: totalIGST.toString(),
-          credit: '0',
-          description: 'Input IGST',
-        });
-      }
-
-      lines.push({
-        account: cashAccount._id,
-        debit: '0',
-        credit: totalAmount.toString(),
-        description: `Payment via ${expense.paymentMethod}`,
+      const lines = buildExpenseJournalLines({
+        expenseAccountId: expenseAccount._id,
+        cashAccountId: cashAccount._id,
+        gstAccountIds: { cgst: inputCGST._id, sgst: inputSGST._id, igst: inputIGST._id },
+        category: expense.category,
+        paymentMethod: expense.paymentMethod,
+        totalAmount,
+        tax: { cgst: totalCGST, sgst: totalSGST, igst: totalIGST },
       });
       
       // Create journal entry

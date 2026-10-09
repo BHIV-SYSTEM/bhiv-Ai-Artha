@@ -211,34 +211,7 @@ export const mitraService = {
   health: () => api.get('/mitra/health'),
 };
 
-// Dealer Services
-export const dealerService = {
-  getAll: (params) => api.get('/dealers', { params }),
-  getById: (id) => api.get(`/dealers/${id}`),
-  create: (data) => api.post('/dealers', data),
-  update: (id, data) => api.put(`/dealers/${id}`, data),
-  delete: (id) => api.delete(`/dealers/${id}`),
-  getSummary: (id) => api.get(`/dealers/${id}/summary`),
-  syncFromTally: () => api.post('/dealers/sync-tally'),
-  syncOutstanding: () => api.post('/dealers/sync-outstanding'),
-  getStats: () => api.get('/dealers/stats'),
-  getRegions: () => api.get('/dealers/regions'),
-  getCities: () => api.get('/dealers/cities'),
-};
-
-// Sales Agent Services
-export const salesAgentService = {
-  getAll: (params) => api.get('/sales-agents', { params }),
-  getById: (id) => api.get(`/sales-agents/${id}`),
-  create: (data) => api.post('/sales-agents', data),
-  update: (id, data) => api.put(`/sales-agents/${id}`, data),
-  delete: (id) => api.delete(`/sales-agents/${id}`),
-  getDashboard: (id) => api.get(`/sales-agents/${id}/dashboard`),
-  getPerformance: (id, params) => api.get(`/sales-agents/${id}/performance`, { params }),
-  assignDealer: (agentId, dealerId) => api.post(`/sales-agents/${agentId}/assign-dealer/${dealerId}`),
-  unassignDealer: (agentId, dealerId) => api.delete(`/sales-agents/${agentId}/unassign-dealer/${dealerId}`),
-  getMap: () => api.get('/sales-agents/map'),
-};
+// Dealer/sales-agent UI removed (Setu handles this); backend routes remain.
 
 // Notification Services
 export const notificationService = {
@@ -250,5 +223,20 @@ export const notificationService = {
   markAllRead: () => api.put('/notifications/read-all'),
   registerDeviceToken: (data) => api.post('/notifications/device-token', data),
   removeDeviceToken: (token) => api.delete(`/notifications/device-token/${token}`),
+};
+
+// Document Ingestion Services (PDF, images, DOCX, spreadsheets, text)
+export const ingestService = {
+  ingest: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/ingest', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  list: (params = {}) => api.get('/ingest', { params }),
+  get: (documentId) => api.get(`/ingest/${documentId}`),
+  remove: (documentId) => api.delete(`/ingest/${documentId}`),
+  capabilities: () => api.get('/ingest/capabilities'),
 };
 

@@ -76,6 +76,16 @@ export const syncFromTally = async (req, res) => {
   }
 };
 
+export const syncSetu = async (req, res) => {
+  try {
+    const result = await dealerService.syncFromSetu();
+    res.json({ success: true, data: result });
+  } catch (error) {
+    logger.error('Sync from SETU error:', error);
+    res.status(502).json({ success: false, message: error.message });
+  }
+};
+
 export const syncOutstanding = async (req, res) => {
   try {
     const result = await dealerService.syncOutstandingFromTally();

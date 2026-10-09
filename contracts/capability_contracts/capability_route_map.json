@@ -21,6 +21,7 @@
     { "prefix": "/api/v1/gst", "capability": "ARTHA-SIGNAL-001" },
     { "prefix": "/api/v1/statements", "capability": "ARTHA-LEDGER-001" },
     { "prefix": "/api/v1/upload", "capability": "ARTHA-LEDGER-001" },
+    { "prefix": "/api/v1/ingest", "capability": "ARTHA-LEDGER-001" },
     { "prefix": "/api/v1/settings", "capability": "ARTHA-MULTICOMPANY-001" },
     { "prefix": "/api/v1/database", "capability": "ARTHA-OBSERVE-001" },
     { "prefix": "/api/v1/performance", "capability": "ARTHA-OBSERVE-001" },

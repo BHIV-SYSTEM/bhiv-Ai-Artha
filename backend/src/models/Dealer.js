@@ -112,6 +112,11 @@ const dealerSchema = new mongoose.Schema({
     default: '',
     index: true,
   },
+  setuCustomerId: {
+    type: String,
+    default: '',
+    index: true,
+  },
   isActive: {
     type: Boolean,
     default: true,

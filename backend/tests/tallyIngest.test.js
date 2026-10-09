@@ -1,47 +1,95 @@
 /**
  * tallyIngest.test — HMAC verification + ingestion with mocked mongoose.
  */
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+// Jest globals (describe/it/expect/jest/beforeAll/afterAll) - this suite
+// used to import from 'vitest', which is not a dependency, so it never ran.
 import http from 'node:http';
 import crypto from 'node:crypto';
 
 // ─── Mock mongoose entirely to prevent any real DB connections ──────
-const mockUpsert = vi.fn(() => Promise.resolve({}));
-const mockFindChain = vi.fn(() => ({ sort: () => ({ limit: () => ({ lean: () => Promise.resolve([]) }) }) }));
+const mockUpsert = jest.fn(() => Promise.resolve({}));
+const mockFindChain = jest.fn(() => ({ sort: () => ({ limit: () => ({ lean: () => Promise.resolve([]) }) }) }));
 
-vi.mock('mongoose', async () => {
-  const m = await vi.importActual('mongoose');
-  return {
-    default: {
-      ...m.default,
-      Schema: m.default.Schema,
-      model: vi.fn(() => ({
-        findOneAndUpdate: mockUpsert,
-        find: mockFindChain,
-        countDocuments: vi.fn(() => Promise.resolve(1)),
-        deleteMany: vi.fn(() => Promise.resolve({})),
-      })),
-      connect: vi.fn(() => Promise.resolve()),
-      connection: { close: vi.fn(() => Promise.resolve()) },
-    },
+jest.mock('mongoose', () => {
+  const actual = jest.requireActual('mongoose');
+  const mg = actual.default || actual;
+  // Chainable null-query: awaitable AND supports .lean()/.sort()/.limit()…
+  const makeQuery = () => {
+    const promise = Promise.resolve(null);
+    const q = {
+      lean: () => promise,
+      sort: () => q,
+      limit: () => q,
+      select: () => q,
+      session: () => q,
+      populate: () => q,
+      then: (onF, onR) => promise.then(onF, onR),
+      catch: (onR) => promise.catch(onR),
+    };
+    return q;
   };
+  const fakeModel = jest.fn(() => ({
+    findOne: () => makeQuery(),
+    findById: () => makeQuery(),
+    findOneAndUpdate: () => Promise.resolve({}),
+    find: () => makeQuery(),
+    countDocuments: jest.fn(() => Promise.resolve(1)),
+    deleteMany: jest.fn(() => Promise.resolve({})),
+    create: () => Promise.resolve({}),
+  }));
+  // Explicit shape only: copying mongoose's own object fails (read-only
+  // props like `plugins` throw on Object.assign / object spread getters).
+  const mocked = {
+    Schema: mg.Schema,
+    SchemaTypes: mg.Schema ? mg.Schema.Types : mg.Types,
+    Types: mg.Types,
+    model: fakeModel,
+    models: {},
+    connect: jest.fn(() => Promise.resolve()),
+    connection: { close: jest.fn(() => Promise.resolve()), readyState: 1 },
+    startSession: jest.fn(() => ({
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn(),
+      abortTransaction: jest.fn(),
+      endSession: jest.fn(),
+    })),
+  };
+  return { __esModule: true, default: mocked, ...mocked };
 });
 
-vi.mock('../../src/models/TallyParty.js', () => ({ default: { findOneAndUpdate: mockUpsert, find: mockFindChain, countDocuments: vi.fn(() => Promise.resolve(1)), deleteMany: vi.fn(() => Promise.resolve({})) } }));
-vi.mock('../../src/models/TallyOutstanding.js', () => ({ default: { findOneAndUpdate: mockUpsert, find: mockFindChain, countDocuments: vi.fn(() => Promise.resolve(1)), deleteMany: vi.fn(() => Promise.resolve({})) } }));
-vi.mock('../../src/models/TallyVoucher.js', () => ({ default: { findOneAndUpdate: mockUpsert, find: mockFindChain, countDocuments: vi.fn(() => Promise.resolve(1)), deleteMany: vi.fn(() => Promise.resolve({})) } }));
-vi.mock('../../src/models/TallySyncRun.js', () => ({ default: { findOneAndUpdate: mockUpsert, find: mockFindChain, deleteMany: vi.fn(() => Promise.resolve({})) } }));
+
+jest.mock('../src/models/TallyParty.js', () => ({ __esModule: true, default: { findOneAndUpdate: mockUpsert, find: mockFindChain, countDocuments: jest.fn(() => Promise.resolve(1)), deleteMany: jest.fn(() => Promise.resolve({})) } }));
+jest.mock('../src/models/TallyOutstanding.js', () => ({
+  __esModule: true,
+  default: {
+    findOneAndUpdate: mockUpsert,
+    find: mockFindChain,
+    countDocuments: jest.fn(() => Promise.resolve(1)),
+    deleteMany: jest.fn(() => Promise.resolve({})),
+    // The controller derives BILL_TYPES from the schema at load time
+    // (tallyIngest.controller.js:130) — mirror the real model's enum.
+    schema: {
+      path: (name) => (name === 'billType'
+        ? { enumValues: ['New', 'New Ref', 'Advance', 'Agst Ref', 'On Account', 'Credit', 'Dr', 'Cr', 'Bill', 'Sales Bill', 'Purchase Bill', 'Debit Note', 'Credit Note', 'UNKNOWN'] }
+        : undefined),
+    },
+  },
+}));
+jest.mock('../src/models/TallyVoucher.js', () => ({ __esModule: true, default: { findOneAndUpdate: mockUpsert, find: mockFindChain, countDocuments: jest.fn(() => Promise.resolve(1)), deleteMany: jest.fn(() => Promise.resolve({})) } }));
+jest.mock('../src/models/TallySyncRun.js', () => ({ __esModule: true, default: { findOneAndUpdate: mockUpsert, find: mockFindChain, deleteMany: jest.fn(() => Promise.resolve({})) } }));
 
 // ─── Helpers ───────────────────────────────────────────────────────
 const sha256 = (d) => crypto.createHash('sha256').update(typeof d === 'string' ? d : JSON.stringify(d)).digest('hex');
-const hmacSig = (s, m) => crypto.createHash('sha256').update(m).update(s).digest('hex');
+const hmacSig = (s, m) => crypto.createHmac('sha256', s).update(m).digest('hex');
 
 const KEY = 'k', SECRET = 's';
 let server, base;
 
-const { verifyIngestAuth, ingest, ingestStatus } = await import('../../src/controllers/tallyIngest.controller.js');
+// Loaded in beforeAll: top-level `await import` is not parseable by babel-jest.
+let verifyIngestAuth, ingest, ingestStatus;
 
 beforeAll(async () => {
+  ({ verifyIngestAuth, ingest, ingestStatus } = await import('../src/controllers/tallyIngest.controller.js'));
   process.env.TALLY_CONNECTOR_API_KEY = KEY;
   process.env.TALLY_CONNECTOR_HMAC_SECRET = SECRET;
   const express = (await import('express')).default;

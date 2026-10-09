@@ -8,7 +8,6 @@ import {
   DollarSign,
   User,
   Filter,
-  Send,
 } from 'lucide-react';
 import {
   BarChart,
@@ -30,7 +29,7 @@ import {
   Loading,
   EmptyState,
 } from '../../components/common';
-import api, { API_BASE_URL } from '../../services/api';
+import api from '../../services/api';
 import toast from 'react-hot-toast';
 import { formatCurrency, formatDate } from '../../utils/formatters';
 
@@ -101,27 +100,37 @@ const AgedReceivables = () => {
     }
   };
 
-  const handleExport = async () => {
+  const handleExport = () => {
+    if (!filteredCustomers.length) {
+      toast.error('No data to export');
+      return;
+    }
     try {
       const asOfDate = new Date().toISOString().split('T')[0];
-      const url = `${API_BASE_URL}/reports/aged-receivables/export?asOfDate=${asOfDate}`;
-      
-      const response = await fetch(url, {
-        credentials: 'include',
-      });
-      
-      if (!response.ok) throw new Error('Export failed');
-      
-      const blob = await response.blob();
+      const header = ['Customer', 'Email', 'Total Outstanding', 'Current', '1-30 Days', '31-60 Days', '61-90 Days', '90+ Days'];
+      const rows = filteredCustomers.map((c) => [
+        c.name,
+        c.email || '',
+        c.total,
+        c.current,
+        c.days1_30,
+        c.days31_60,
+        c.days61_90,
+        c.over90,
+      ]);
+      const csv = [header, ...rows]
+        .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const downloadUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = downloadUrl;
-      link.download = `aged-receivables-${asOfDate}.pdf`;
+      link.download = `aged-receivables-${asOfDate}.csv`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(downloadUrl);
-      toast.success('Report exported successfully');
+      toast.success('Report exported as CSV');
     } catch (error) {
       console.error('Export failed:', error);
       toast.error('Failed to export report. Please try again.');
@@ -162,7 +171,7 @@ const AgedReceivables = () => {
     if (daysOverdue === 0) return <Badge variant="success">Current</Badge>;
     if (daysOverdue <= 30) return <Badge variant="info">{daysOverdue} days</Badge>;
     if (daysOverdue <= 60) return <Badge variant="warning">{daysOverdue} days</Badge>;
-    if (daysOverdue <= 90) return <Badge variant="orange">{daysOverdue} days</Badge>;
+    if (daysOverdue <= 90) return <Badge variant="purple">{daysOverdue} days</Badge>;
     return <Badge variant="danger">{daysOverdue} days</Badge>;
   };
 
@@ -177,7 +186,7 @@ const AgedReceivables = () => {
         description="Track outstanding customer invoices by aging buckets"
         action={
           <Button variant="secondary" icon={Download} onClick={handleExport}>
-            Export PDF
+            Export CSV
           </Button>
         }
       />
@@ -298,9 +307,6 @@ const AgedReceivables = () => {
                       {formatCurrency(customer.total)}
                     </p>
                   </div>
-                  <Button variant="secondary" size="sm" icon={Send}>
-                    Send Reminder
-                  </Button>
                 </div>
               </div>
 

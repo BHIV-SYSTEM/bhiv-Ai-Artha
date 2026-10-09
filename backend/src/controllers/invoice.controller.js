@@ -46,6 +46,8 @@ export const getInvoices = async (req, res) => {
       dateTo: req.query.dateTo,
       customerName: req.query.customerName,
       search: req.query.search,
+      customerEmail: req.query.customerEmail,
+      customerGSTIN: req.query.customerGSTIN,
     };
     
     const pagination = {
@@ -250,8 +252,16 @@ export const getInvoiceStats = async (req, res) => {
 // @access  Private
 export const downloadInvoicePDF = async (req, res) => {
   try {
-    const invoice = await invoiceService.getInvoiceById(req.params.id);
-    
+    let invoice = null;
+    try {
+      invoice = await invoiceService.getInvoiceById(req.params.id);
+    } catch (err) {
+      // Out of the requester's workspace — fall back to shared verification
+      // (customer email / GSTIN match) so an addressed recipient can still
+      // download, while everyone else gets a plain 404.
+      invoice = await invoiceService.getSharedInvoice(req.params.id, req.user);
+    }
+
     if (!invoice) {
       return res.status(404).json({
         success: false,
@@ -279,6 +289,9 @@ export const downloadInvoicePDF = async (req, res) => {
     
     logger.info(`Invoice PDF downloaded: ${invoice.invoiceNumber}`);
   } catch (error) {
+    if (error.message === 'Invoice not found') {
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
+    }
     logger.error('Download invoice PDF error:', error);
     res.status(500).json({
       success: false,

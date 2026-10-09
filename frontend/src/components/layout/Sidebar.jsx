@@ -21,6 +21,8 @@ import {
   Radio,
   Database,
   Workflow,
+  Bell,
+  Upload,
 } from 'lucide-react';
 import { useState } from 'react';
 import clsx from 'clsx';
@@ -36,23 +38,28 @@ const menuItems = [
   {
     title: 'Data Ingestion',
     icon: Database,
-    path: '/ingestion',
     roles: ['admin', 'accountant'],
+    excludeRoles: ['admin'],
+    path: '/ingestion',
   },
   {
     title: 'Tally Connect',
     icon: Workflow,
+    excludeRoles: ['admin'],
     path: '/tally',
   },
   {
     title: 'Invoices',
     icon: FileText,
     path: '/invoices',
+    // Super admin owns the platform, not day-to-day bookkeeping.
+    excludeRoles: ['admin'],
   },
   {
     title: 'Expenses',
     icon: Receipt,
     path: '/expenses',
+    excludeRoles: ['admin'],
     children: [
       { title: 'All Expenses', path: '/expenses' },
       { title: 'Approval Queue', path: '/expenses/approval', roles: ['admin', 'accountant'] },
@@ -62,6 +69,7 @@ const menuItems = [
     title: 'Accounting',
     icon: Landmark,
     roles: ['admin', 'accountant'],
+    excludeRoles: ['admin'],
     children: [
       { title: 'Chart of Accounts', path: '/accounts' },
       { title: 'Journal Entries', path: '/journal-entries' },
@@ -71,6 +79,7 @@ const menuItems = [
   {
     title: 'Reports',
     icon: BarChart3,
+    excludeRoles: ['admin'],
     children: [
       { title: 'Profit & Loss', path: '/reports/profit-loss', icon: TrendingUp },
       { title: 'Balance Sheet', path: '/reports/balance-sheet', icon: Scale },
@@ -82,22 +91,31 @@ const menuItems = [
   {
     title: 'GST',
     icon: FileSpreadsheet,
+    excludeRoles: ['admin'],
     path: '/gst',
   },
   {
     title: 'TDS',
     icon: Calculator,
+    excludeRoles: ['admin'],
     path: '/tds',
   },
   {
     title: 'Signals',
     icon: Radio,
+    excludeRoles: ['admin'],
     path: '/signals',
     roles: ['admin', 'accountant'],
   },
   {
+    title: 'Notifications',
+    icon: Bell,
+    path: '/notifications',
+  },
+  {
     title: 'Statements',
     icon: CreditCard,
+    excludeRoles: ['admin'],
     path: '/statements',
     children: [
       { title: 'All Statements', path: '/statements' },
@@ -109,7 +127,7 @@ const menuItems = [
     icon: Settings,
     roles: ['admin'],
     children: [
-      { title: 'Company', path: '/settings/company' },
+      { title: 'Company', path: '/settings/company', excludeRoles: ['admin'] },
       { title: 'Users', path: '/settings/users' },
     ],
   },
@@ -128,22 +146,38 @@ const Sidebar = ({ isOpen, mobileOpen, onMobileClose }) => {
   };
 
   const isParentActive = (children) => children?.some((child) => location.pathname === child.path);
-  
+
+  // Raw role check: a tenant sub_admin expands to 'admin' elsewhere and must
+  // never be mistaken for the single platform super admin.
+  const isSuperAdmin = user?.role === 'admin' && !user?.companyId;
+
   const hasAccess = (item) => {
-    if (!item.roles || item.roles.length === 0) return true;
-    let userRoles = user?.roles || [user?.role];
+    const rawRoles = user?.roles || (user?.role ? [user.role] : []);
+    // excludeRoles is matched against RAW roles on purpose: a sub_admin
+    // expands to 'admin' for visibility, but must not be treated as the
+    // super admin here.
+    if (item.excludeRoles && rawRoles.some((r) => item.excludeRoles.includes(r))) {
+      return false;
+    }
+    let userRoles = rawRoles;
     // Sub-admin (client company admin) gets admin + accountant visibility.
     if (userRoles.includes('sub_admin')) {
       userRoles = [...new Set([...userRoles, 'admin', 'accountant'])];
     }
-    return item.roles.some(r => userRoles.includes(r));
+    if (!item.roles || item.roles.length === 0) return true;
+    return item.roles.some((r) => userRoles.includes(r));
   };
   
   const filteredMenuItems = menuItems.filter(hasAccess).map(item => {
-    if (item.children) {
-      return { ...item, children: item.children.filter(hasAccess) };
+    // Super admin sees the platform view, not tenant bookkeeping.
+    const relabeled =
+      isSuperAdmin && item.path === '/dashboard'
+        ? { ...item, title: 'Platform' }
+        : item;
+    if (relabeled.children) {
+      return { ...relabeled, children: relabeled.children.filter(hasAccess) };
     }
-    return item;
+    return relabeled;
   });
 
   const getActiveClasses = (active) => {

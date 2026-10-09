@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowDownRight,
@@ -24,6 +25,8 @@ import {
   FileText,
   PiggyBank,
   TrendingUp,
+  ListChecks,
+  CalendarClock,
 } from 'lucide-react';
 import {
   BarChart,
@@ -40,7 +43,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { Card, Loading } from '../../components/common';
+import { Card, Loading, Badge } from '../../components/common';
 import SignalStackPanel from '../../components/intelligence/SignalStackPanel';
 import SignalDetailEngine from '../../components/intelligence/SignalDetailEngine';
 import RuntimeModeBanner from '../../components/intelligence/RuntimeModeBanner';
@@ -144,6 +147,7 @@ const INVOICE_STATUS_COLORS = {
 };
 
 const FinancialIntelligenceDashboard = () => {
+  const navigate = useNavigate();
   const { mode, lastChecked, recheck } = useRuntimeMode();
   const { signals: rawSignals, source, loading: signalsLoading, error: signalsError, fetchSignals } = useSignals();
   const [selectedSignal, setSelectedSignal] = useState(null);
@@ -153,6 +157,7 @@ const FinancialIntelligenceDashboard = () => {
   const [revenueExpensesChart, setRevenueExpensesChart] = useState([]);
   const [expenseBreakdown, setExpenseBreakdown] = useState([]);
   const [bankTimeline, setBankTimeline] = useState([]);
+  const [actionItems, setActionItems] = useState({ items: [], deadlines: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -175,7 +180,7 @@ const FinancialIntelligenceDashboard = () => {
       const lastDayOfYear = new Date(today.getFullYear(), 11, 31);
       const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-      const [dashResult, chartResult, breakdownResult, timelineResult] = await Promise.allSettled([
+      const [dashResult, chartResult, breakdownResult, timelineResult, actionsResult] = await Promise.allSettled([
         dashboardService.getStats(),
         api.get(`/reports/revenue-expenses-chart?year=${today.getFullYear()}`, { signal }),
         api.get(`/reports/expense-breakdown?startDate=${firstDayOfYear.toISOString().split('T')[0]}&endDate=${lastDayOfYear.toISOString().split('T')[0]}`, { signal }),
@@ -183,6 +188,7 @@ const FinancialIntelligenceDashboard = () => {
           startDate: firstDayOfMonth.toISOString().split('T')[0],
           endDate: today.toISOString().split('T')[0],
         }),
+        api.get('/ca-workflow/action-items', { signal }),
       ]);
 
       if (signal?.aborted) return;
@@ -191,6 +197,11 @@ const FinancialIntelligenceDashboard = () => {
       setRevenueExpensesChart(chartResult.status === 'fulfilled' ? chartResult.value.data.data : []);
       setExpenseBreakdown(breakdownResult.status === 'fulfilled' ? breakdownResult.value.data.data : []);
       setBankTimeline(timelineResult.status === 'fulfilled' ? timelineResult.value.data.data : []);
+      setActionItems(
+        actionsResult.status === 'fulfilled'
+          ? actionsResult.value.data.data || { items: [], deadlines: [] }
+          : { items: [], deadlines: [] }
+      );
     } catch (err) {
       if (err.name === 'CanceledError' || err.name === 'AbortError') return;
       setError(err.message);
@@ -272,6 +283,86 @@ const FinancialIntelligenceDashboard = () => {
           <KpiCard icon={CreditCard} label="Outstanding" value={fmt(d.summary?.totalOutstanding)} subValue={`${d.invoices?.overdue?.count || 0} overdue invoices`} color="warning" />
         </section>
       ) : null}
+
+      {/* Pending Actions & Statutory Deadlines — from CA workflow queue */}
+      {!loading && (actionItems.items.length > 0 || actionItems.deadlines.length > 0) && (
+        <section className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+          <Card className="lg:col-span-2 p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <ListChecks className="w-4 h-4 text-primary" />
+              <h2 className="text-sm font-semibold text-foreground">Pending Actions</h2>
+            </div>
+            <div className="space-y-2">
+              {actionItems.items.length === 0 && (
+                <p className="text-sm text-muted-foreground">Nothing pending — all caught up.</p>
+              )}
+              {actionItems.items.map((item) => (
+                <button
+                  key={item.type}
+                  onClick={() => navigate(item.link)}
+                  className="w-full flex items-center justify-between gap-3 p-3 rounded-lg bg-muted hover:bg-muted/70 text-left transition-colors"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{item.title}</p>
+                    {item.detail && (
+                      <p className="text-xs text-muted-foreground truncate">{item.detail}</p>
+                    )}
+                  </div>
+                  <Badge
+                    variant={
+                      item.priority === 'high'
+                        ? 'danger'
+                        : item.priority === 'medium'
+                          ? 'warning'
+                          : 'default'
+                    }
+                  >
+                    {item.count}
+                  </Badge>
+                </button>
+              ))}
+            </div>
+          </Card>
+
+          <Card className="p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <CalendarClock className="w-4 h-4 text-primary" />
+              <h2 className="text-sm font-semibold text-foreground">Statutory Deadlines</h2>
+            </div>
+            <div className="space-y-2">
+              {actionItems.deadlines.length === 0 && (
+                <p className="text-sm text-muted-foreground">No upcoming deadlines.</p>
+              )}
+              {actionItems.deadlines.map((dl) => (
+                <div
+                  key={dl.label}
+                  className="flex items-center justify-between gap-3 p-3 rounded-lg bg-muted"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{dl.label}</p>
+                    <p className="text-xs text-muted-foreground">Due {dl.dueDate}</p>
+                  </div>
+                  <Badge
+                    variant={
+                      dl.state === 'overdue'
+                        ? 'danger'
+                        : dl.state === 'due_soon'
+                          ? 'warning'
+                          : 'default'
+                    }
+                  >
+                    {dl.state === 'overdue'
+                      ? `${Math.abs(dl.daysLeft)}d late`
+                      : dl.daysLeft === 0
+                        ? 'Today'
+                        : `${dl.daysLeft}d`}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </section>
+      )}
 
       {/* Charts Row — Revenue vs Expenses + Expense Breakdown */}
       {!loading && (

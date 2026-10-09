@@ -128,15 +128,16 @@ const InvoiceViewInner = () => {
   };
 
   const handleCancelInvoice = async () => {
-    if (!confirm('Are you sure you want to cancel this invoice?')) return;
+    const reason = window.prompt('Cancellation reason (optional):');
+    if (reason === null) return;
 
     setProcessing(true);
     try {
-      await api.post(`/invoices/${id}/cancel`);
+      await api.post(`/invoices/${id}/cancel`, { reason: reason.trim() || undefined });
       toast.success('Invoice cancelled');
       fetchInvoice();
     } catch (error) {
-      toast.error('Failed to cancel invoice');
+      toast.error(error.response?.data?.message || 'Failed to cancel invoice');
     } finally {
       setProcessing(false);
     }
@@ -221,6 +222,13 @@ const InvoiceViewInner = () => {
                 Edit
               </Button>
             )}
+            {!isShared &&
+              !['cancelled', 'paid'].includes(invoice.status) &&
+              can(['admin', 'accountant']) && (
+                <Button variant="danger" icon={XCircle} onClick={handleCancelInvoice}>
+                  Cancel Invoice
+                </Button>
+              )}
           </div>
         }
       />
@@ -245,6 +253,11 @@ const InvoiceViewInner = () => {
               {isShared && <Badge variant="info">Shared</Badge>}
               {getStatusBadge(invoice.status)}
             </div>
+            {invoice.sentAt && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Sent {formatDate(invoice.sentAt, 'datetime')}
+              </p>
+            )}
           </div>
         </div>
 

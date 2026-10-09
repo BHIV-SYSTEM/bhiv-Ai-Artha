@@ -19,6 +19,7 @@ router.get('/readonly-proof', tallyConnectorController.readonlyProof);
 // Per-account connector credentials (workspace-bound ingest keys)
 router.get('/credentials', authorize('admin', 'sub_admin'), tallyConnectorController.getCredentials);
 router.post('/credentials/rotate', authorize('admin', 'sub_admin'), tallyConnectorController.rotateCredentials);
+router.post('/credentials/revoke', authorize('admin', 'sub_admin'), tallyConnectorController.revokeCredentials);
 
 router.post('/sync', tallyConnectorController.runSync);
 router.post('/sync/now', tallyConnectorController.syncNow);

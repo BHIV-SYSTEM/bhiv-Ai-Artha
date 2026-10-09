@@ -1,6 +1,7 @@
 import Decimal from 'decimal.js';
 import { randomUUID } from 'crypto';
 import Invoice from '../models/Invoice.js';
+import JournalEntry from '../models/JournalEntry.js';
 import companySettingsService from './companySettings.service.js';
 import ledgerService from './ledger.service.js';
 import ChartOfAccounts from '../models/ChartOfAccounts.js';
@@ -81,6 +82,8 @@ class InvoiceService {
       dateTo,
       customerName,
       search,
+      customerEmail,
+      customerGSTIN,
     } = filters;
     
     const {
@@ -91,6 +94,7 @@ class InvoiceService {
     } = pagination;
     
     const query = {};
+    const andClauses = [];
     
     if (status) {
       query.status = status;
@@ -109,11 +113,36 @@ class InvoiceService {
     
     if (search) {
       const safeSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      query.$or = [
-        { invoiceNumber: { $regex: safeSearch, $options: 'i' } },
-        { customerName: { $regex: safeSearch, $options: 'i' } },
-        { customerEmail: { $regex: safeSearch, $options: 'i' } },
-      ];
+      andClauses.push({
+        $or: [
+          { invoiceNumber: { $regex: safeSearch, $options: 'i' } },
+          { customerName: { $regex: safeSearch, $options: 'i' } },
+          { customerEmail: { $regex: safeSearch, $options: 'i' } },
+        ],
+      });
+    }
+    
+    // Customer ownership scope (exact, case-insensitive): invoice matches if
+    // customerEmail or customerGSTIN equals the supplied value(s).
+    const scopeClauses = [];
+    if (customerEmail) {
+      const safeEmail = String(customerEmail).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      scopeClauses.push({ customerEmail: { $regex: `^${safeEmail}$`, $options: 'i' } });
+    }
+    if (customerGSTIN) {
+      const safeGstin = String(customerGSTIN).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      scopeClauses.push({ customerGSTIN: { $regex: `^${safeGstin}$`, $options: 'i' } });
+    }
+    if (scopeClauses.length === 1) {
+      andClauses.push(scopeClauses[0]);
+    } else if (scopeClauses.length > 1) {
+      andClauses.push({ $or: scopeClauses });
+    }
+    
+    if (andClauses.length === 1) {
+      Object.assign(query, andClauses[0]);
+    } else if (andClauses.length > 1) {
+      query.$and = andClauses;
     }
     
     const skip = (page - 1) * limit;
@@ -349,16 +378,15 @@ class InvoiceService {
         customerGSTIN: invoice.customerGSTIN,
       });
 
+      // Verification only decides whether the recipient's ARTHA workspace can
+      // see this invoice — sharing itself is resolved at read time
+      // (getSharedInvoices matches on customerEmail / customerGSTIN).
+      // An unverified recipient is the NORMAL case (customers who are not
+      // ARTHA users), so it must never block sending.
       if (!verification.verified) {
-        const error = new Error('Recipient details could not be verified. Invoice email and GSTIN must both match the same ARTHA account.');
-        error.code = 'RECIPIENT_NOT_VERIFIED';
-        error.details = {
-          emailMatched: verification.emailMatched,
-          gstMatched: verification.gstMatched,
-          customerEmail: verification.customerEmail,
-          customerGSTIN: verification.customerGSTIN,
-        };
-        throw error;
+        logger.info(
+          `Invoice ${invoice.invoiceNumber}: recipient is not a shared ARTHA account — sending normally`
+        );
       }
 
       // Create journal entry to record AR
@@ -556,27 +584,45 @@ class InvoiceService {
         });
       }
 
-      const journalEntry = await ledgerService.createJournalEntry(
-        {
-          date: invoice.invoiceDate,
-          description: `Invoice ${invoice.invoiceNumber} to ${invoice.customerName}`,
-          lines,
-          reference: invoice.invoiceNumber,
-          tags: ['invoice', invoice.invoiceNumber],
-          source: 'SYSTEM',
-          trace_id: traceId,
-          gstDetails,
-          auditAction: 'INVOICE_SENT',
-        },
-        userId
-      );
-      
-      // Validate before posting to enforce draft -> validate -> post workflow
-      await ledgerService.validateJournalEntry(journalEntry._id, userId);
-      await ledgerService.postJournalEntry(journalEntry._id, userId);
+      // Idempotent AR posting: if a journal for this invoice number already
+      // exists (e.g. a retried send after a partial failure), reuse it instead
+      // of creating a duplicate posting.
+      let journalEntry = await JournalEntry.findOne({
+        reference: invoice.invoiceNumber,
+        status: { $nin: ['VOIDED', 'voided'] },
+      });
+
+      if (journalEntry) {
+        const alreadyPosted = ['POSTED', 'posted'].includes(journalEntry.status);
+        if (!alreadyPosted) {
+          // postJournalEntry self-validates draft entries.
+          await ledgerService.postJournalEntry(journalEntry._id, userId);
+        }
+        logger.warn(`Invoice ${invoice.invoiceNumber}: existing journal ${journalEntry.entryNumber} reused (idempotent send)`);
+      } else {
+        journalEntry = await ledgerService.createJournalEntry(
+          {
+            date: invoice.invoiceDate,
+            description: `Invoice ${invoice.invoiceNumber} to ${invoice.customerName}`,
+            lines,
+            reference: invoice.invoiceNumber,
+            tags: ['invoice', invoice.invoiceNumber],
+            source: 'SYSTEM',
+            trace_id: traceId,
+            gstDetails,
+            auditAction: 'INVOICE_SENT',
+          },
+          userId
+        );
+
+        // Validate before posting to enforce draft -> validate -> post workflow
+        await ledgerService.validateJournalEntry(journalEntry._id, userId);
+        await ledgerService.postJournalEntry(journalEntry._id, userId);
+      }
       
       // Update invoice status
       invoice.status = 'sent';
+      invoice.sentAt = invoice.sentAt || new Date();
       await invoice.save({ session });
       
       // Audit trail

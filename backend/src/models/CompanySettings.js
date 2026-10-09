@@ -160,10 +160,12 @@ const companySettingsSchema = new mongoose.Schema({
     startDay: { type: Number, default: 1 },
   },
 
-  // Logo
+  // Logo — the settings form stores a plain string (data-URL or file path)
+  // it can put straight into <img src>. Legacy documents used
+  // { filename, path }; Mixed accepts both so old rows keep loading.
   logo: {
-    filename: String,
-    path: String,
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
   },
 }, {
   timestamps: true,

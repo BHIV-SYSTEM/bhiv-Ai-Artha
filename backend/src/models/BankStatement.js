@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import './Counter.js';
 import Decimal from 'decimal.js';
-import companyScope from '../utils/companyScope.js';
+import companyScope, { getScope } from '../utils/companyScope.js';
 
 // Decimal validation helper
 const validateDecimal = {
@@ -192,7 +192,11 @@ bankStatementSchema.index({ 'transactions.date': -1 });
 bankStatementSchema.pre('save', async function(next) {
   if (this.isNew && !this.statementNumber) {
     const Counter = mongoose.model('Counter');
-    const seq = await Counter.getNextSequence('bankStatement');
+    const scope = getScope();
+    const wsKey = scope && scope.workspace ? String(scope.workspace) : null;
+    const seq = wsKey
+      ? await Counter.getNextSequence('bankStatement', { ws: wsKey }, {})
+      : await Counter.getNextSequence('bankStatement');
     this.statementNumber = `STMT-${String(seq).padStart(6, '0')}`;
   }
   next();

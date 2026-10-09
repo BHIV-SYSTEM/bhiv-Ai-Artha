@@ -151,7 +151,9 @@ const CompanySettings = () => {
   const onSubmit = async (data) => {
     setSaving(true);
     try {
-      await api.put('/settings/company', data);
+      // logoPreview holds the picked image (data-URL); it is separate state,
+      // not a react-hook-form field, so it must be merged into the payload.
+      await api.put('/settings/company', { ...data, logo: logoPreview ?? null });
       toast.success('Settings saved successfully');
     } catch (error) {
       toast.error('Failed to save settings');
@@ -162,13 +164,18 @@ const CompanySettings = () => {
 
   const handleLogoUpload = (e) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setLogoPreview(reader.result);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    // Keep the payload well inside the API's 10MB JSON body limit once base64.
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('Logo must be 2MB or smaller');
+      e.target.value = '';
+      return;
     }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setLogoPreview(reader.result);
+    };
+    reader.readAsDataURL(file);
   };
 
   const stateOptions = [

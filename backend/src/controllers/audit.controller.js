@@ -1,5 +1,17 @@
 import auditService from '../services/audit.service.js';
-import logger from '../config/logger.js';
+
+// authorize('admin') expands sub_admin into 'admin' for route access; these
+// endpoints return platform-wide, unscoped data, so check the RAW role here.
+function requireSuperAdmin(req, res) {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({
+      success: false,
+      message: 'Only the super admin can access platform-wide audit data',
+    });
+    return false;
+  }
+  return true;
+}
 
 class AuditController {
   async getEntityAuditTrail(req, res) {
@@ -19,6 +31,7 @@ class AuditController {
 
   async getAuditSummary(req, res) {
     try {
+      if (!requireSuperAdmin(req, res)) return;
       const summary = await auditService.getAuditSummary(req.query);
       res.json({ success: true, data: summary });
     } catch (err) {
@@ -37,6 +50,7 @@ class AuditController {
 
   async exportAuditTrail(req, res) {
     try {
+      if (!requireSuperAdmin(req, res)) return;
       const events = await auditService.exportAuditTrail(req.query);
       res.json({ success: true, data: events });
     } catch (err) {

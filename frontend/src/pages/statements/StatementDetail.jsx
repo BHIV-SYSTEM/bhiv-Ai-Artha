@@ -19,7 +19,7 @@ const StatementDetail = () => {
     try {
       setLoading(true);
       const response = await bankStatementService.getById(id);
-      setStatement(response.data);
+      setStatement(response.data.data || response.data);
     } catch (error) {
       console.error('Error loading statement:', error);
       toast.error(error.response?.data?.message || 'Failed to load statement');

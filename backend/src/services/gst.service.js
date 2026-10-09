@@ -7,6 +7,7 @@ import logger from '../config/logger.js';
 import { calculateGSTBreakdown } from './gstEngine.service.js';
 import auditService from './audit.service.js';
 import evidenceAutomationService from './evidenceAutomation.service.js';
+import notificationEvent from './notificationEvent.service.js';
 
 class GSTService {
   /**
@@ -342,6 +343,14 @@ class GSTService {
       traceId: randomUUID(),
     });
 
+    notificationEvent.filingStatusUpdated({
+      regime: gstReturn.returnType || 'GST',
+      reference: `${gstReturn.returnType} ${gstReturn.period.month}/${gstReturn.period.year}`,
+      status: 'filed',
+      acknowledgementNumber: gstReturn.acknowledgementNumber || null,
+      period: `${gstReturn.period.month}/${gstReturn.period.year}`,
+    }).catch(() => {});
+
     return gstReturn;
   }
   
@@ -356,9 +365,7 @@ class GSTService {
   /**
    * Get HSN-wise summary
    */
-  async getHSNSummary(month, year) {
-    const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0, 23, 59, 59);
+  async getHSNSummary(_month, _year) {
     
     // Aggregate invoices by HSN code
     // In full implementation, would need HSN code field in invoice lines

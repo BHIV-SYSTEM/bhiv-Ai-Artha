@@ -27,13 +27,13 @@ router.use(protect);
 
 router.route('/general-ledger').get(authorize('admin', 'accountant', 'viewer'), exportGeneralLedger);
 router.route('/profit-loss').get(authorize('admin', 'accountant', 'viewer'), getProfitLoss);
-router.route('/profit-loss/export').get(authorize('admin'), exportProfitLossPDF);
+router.route('/profit-loss/export').get(authorize('admin', 'accountant', 'viewer'), exportProfitLossPDF);
 router.route('/balance-sheet').get(authorize('admin', 'accountant', 'viewer'), getBalanceSheet);
-router.route('/balance-sheet/export').get(authorize('admin'), exportBalanceSheetPDF);
+router.route('/balance-sheet/export').get(authorize('admin', 'accountant', 'viewer'), exportBalanceSheetPDF);
 router.route('/cash-flow').get(authorize('admin', 'accountant', 'viewer'), getCashFlow);
-router.route('/cash-flow/export').get(authorize('admin'), exportCashFlowPDF);
+router.route('/cash-flow/export').get(authorize('admin', 'accountant', 'viewer'), exportCashFlowPDF);
 router.route('/trial-balance').get(authorize('admin', 'accountant', 'viewer'), getTrialBalance);
-router.route('/trial-balance/export').get(authorize('admin'), exportTrialBalancePDF);
+router.route('/trial-balance/export').get(authorize('admin', 'accountant', 'viewer'), exportTrialBalancePDF);
 router.route('/aged-receivables').get(authorize('admin', 'accountant', 'viewer'), getAgedReceivables);
 router.route('/dashboard').get(authorize('admin', 'accountant', 'viewer'), getDashboardSummary);
 router.route('/period-context').get(authorize('admin', 'accountant', 'viewer'), getReportPeriodContext);

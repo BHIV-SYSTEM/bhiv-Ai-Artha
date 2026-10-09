@@ -13,13 +13,64 @@ import {
   Calculator,
   Eye,
   CheckCheck,
+  Database,
+  FileText,
+  BarChart3,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { useCan } from '../../utils/permissions';
 import { notificationService } from '../../services/index';
 import { ThemeDropdown } from '../common/ThemeToggle';
+import { Modal } from '../common';
 import clsx from 'clsx';
 import { formatDistanceToNow } from 'date-fns';
+
+// Quick "how ARTHA flows" overview shown to first-time users (auto) and
+// on demand from the ? button in the top bar.
+const ONBOARDING_STEPS = [
+  {
+    icon: Database,
+    title: '1. Bring your data in',
+    body: 'Tally Connect pulls ledgers from Tally automatically. Smart Upload reads invoices/receipts from PDFs and images. Data Ingestion imports Tally/Zoho/Busy files.',
+    path: '/ingestion',
+    cta: 'Open Data Ingestion',
+  },
+  {
+    icon: FileText,
+    title: '2. Invoice & expense',
+    body: 'Create an invoice or expense — sending/approving it posts a balanced journal entry automatically, with GST calculated line by line.',
+    path: '/invoices',
+    cta: 'Go to Invoices',
+  },
+  {
+    icon: Shield,
+    title: '3. Ledger stays tamper-proof',
+    body: 'Every posting joins an HMAC hash chain. Ledger Integrity verifies the whole chain entry by entry whenever you want proof.',
+    path: '/ledger-integrity',
+    cta: 'Check integrity',
+  },
+  {
+    icon: Calculator,
+    title: '4. GST & TDS compliance',
+    body: 'GSTR-1/GSTR-3B packets and TDS tracking (deduct → deposit → file) are generated from the same ledger — no re-entry.',
+    path: '/gst',
+    cta: 'Open GST',
+  },
+  {
+    icon: BarChart3,
+    title: '5. Money flow',
+    body: 'Bank statements auto-reconcile against invoices, expenses and the ledger; unmatched transactions raise review alerts.',
+    path: '/statements',
+    cta: 'Open Statements',
+  },
+  {
+    icon: Bell,
+    title: '6. Decide with reports & signals',
+    body: 'Dashboard KPIs, P&L / Balance Sheet / Cash Flow and compliance Signals (cash-flow dips, overdue invoices) tell you what needs attention.',
+    path: '/dashboard',
+    cta: 'Back to Dashboard',
+  },
+];
 
 const roleConfig = {
   admin: { label: 'Super Admin', color: 'bg-destructive/10 text-destructive', icon: Shield },
@@ -48,6 +99,26 @@ const Navbar = ({ onToggleSidebar, onMobileMenuClick }) => {
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [showHelp, setShowHelp] = useState(false);
+
+  // First-time users get the overview automatically, once per browser.
+  // The ? button in the top bar reopens it at any time.
+  useEffect(() => {
+    if (!user) return;
+    try {
+      if (localStorage.getItem('artha_onboarding_seen') !== '1') {
+        setShowHelp(true);
+        localStorage.setItem('artha_onboarding_seen', '1');
+      }
+    } catch {
+      /* localStorage unavailable — just skip the auto-open */
+    }
+  }, [user]);
+
+  const openHelpStep = (path) => {
+    setShowHelp(false);
+    navigate(path);
+  };
 
   const displayName = user?.name || user?.email?.split('@')[0] || 'User';
   const displayRole = user?.role || user?.roles?.[0] || 'user';
@@ -239,9 +310,55 @@ const Navbar = ({ onToggleSidebar, onMobileMenuClick }) => {
             )}
           </div>
 
-          <button className="p-2.5 hover:bg-muted rounded-xl transition-all duration-300">
+          <button
+            onClick={() => setShowHelp(true)}
+            title="How ARTHA works"
+            aria-label="How ARTHA works"
+            className="p-2.5 hover:bg-muted rounded-xl transition-all duration-300"
+          >
             <HelpCircle className="w-5 h-5 text-muted-foreground" />
           </button>
+
+          <Modal
+            isOpen={showHelp}
+            onClose={() => setShowHelp(false)}
+            title="How ARTHA works"
+            description="The 60-second flow — from raw data to decisions."
+            size="lg"
+          >
+            <div className="p-6 grid sm:grid-cols-2 gap-4">
+              {ONBOARDING_STEPS.map((step) => (
+                <button
+                  key={step.title}
+                  type="button"
+                  onClick={() => openHelpStep(step.path)}
+                  className="text-left rounded-xl border border-border/40 bg-muted/30 hover:bg-muted p-4 transition-colors"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <step.icon className="w-4 h-4 text-primary" />
+                    <span className="text-sm font-semibold text-foreground">
+                      {step.title}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    {step.body}
+                  </p>
+                  <span className="inline-block mt-2 text-xs font-medium text-primary">
+                    {step.cta} →
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="px-6 pb-6 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowHelp(false)}
+                className="px-5 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+              >
+                Got it
+              </button>
+            </div>
+          </Modal>
 
           {/* User menu */}
           <div className="relative ml-2">

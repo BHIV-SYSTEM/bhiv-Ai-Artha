@@ -23,7 +23,9 @@ import {
   EmptyState,
 } from '../../components/common';
 import api from '../../services/api';
+import { downloadCsv } from '../../utils/csv';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import toast from 'react-hot-toast';
 
 const JournalEntries = () => {
   const navigate = useNavigate();
@@ -31,6 +33,7 @@ const JournalEntries = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [actingId, setActingId] = useState(null);
 
   useEffect(() => {
     fetchEntries();
@@ -61,6 +64,7 @@ const JournalEntries = () => {
     const normalized = (status || '').toLowerCase();
     const config = {
       draft: { variant: 'default', icon: Clock, label: 'Draft' },
+      validated: { variant: 'warning', icon: Clock, label: 'Validated' },
       posted: { variant: 'success', icon: CheckCircle, label: 'Posted' },
       voided: { variant: 'danger', icon: XCircle, label: 'Voided' },
     };
@@ -82,8 +86,42 @@ const JournalEntries = () => {
     return matchesSearch && matchesStatus;
   });
 
+  const handlePost = async (entry, event) => {
+    event.stopPropagation();
+    setActingId(entry._id);
+    try {
+      await api.post(`/ledger/entries/${entry._id}/post`);
+      toast.success(`${entry.entryNumber} posted`);
+      fetchEntries();
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to post entry');
+    } finally {
+      setActingId(null);
+    }
+  };
+
+  const handleVoid = async (entry, event) => {
+    event.stopPropagation();
+    const reason = window.prompt(`Reason for voiding ${entry.entryNumber}:`);
+    if (!reason || !reason.trim()) {
+      if (reason !== null) toast.error('A reason is required to void an entry');
+      return;
+    }
+    setActingId(entry._id);
+    try {
+      await api.post(`/ledger/entries/${entry._id}/void`, { reason: reason.trim() });
+      toast.success(`${entry.entryNumber} voided`);
+      fetchEntries();
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to void entry');
+    } finally {
+      setActingId(null);
+    }
+  };
+
   const statusOptions = [
     { value: 'draft', label: 'Draft' },
+    { value: 'validated', label: 'Validated' },
     { value: 'posted', label: 'Posted' },
     { value: 'voided', label: 'Voided' },
   ];
@@ -123,8 +161,27 @@ const JournalEntries = () => {
               onChange={(e) => setStatusFilter(e.target.value)}
             />
           </div>
-          <Button variant="secondary" icon={Download}>
-            Export
+          <Button
+            variant="secondary"
+            icon={Download}
+            onClick={() => {
+              if (!filteredEntries.length) return;
+              downloadCsv(
+                `journal-entries-${new Date().toISOString().split('T')[0]}`,
+                ['Entry #', 'Date', 'Description', 'Debit', 'Credit', 'Status', 'Created By'],
+                filteredEntries.map((entry) => [
+                  entry.entryNumber,
+                  entry.date || '',
+                  entry.description || '',
+                  entry.debitTotal,
+                  entry.creditTotal,
+                  entry.status,
+                  entry.postedBy?.name || 'System',
+                ])
+              );
+            }}
+          >
+            Export CSV
           </Button>
         </div>
       </Card>
@@ -152,6 +209,7 @@ const JournalEntries = () => {
                 <Table.Head className="text-right">Credit</Table.Head>
                 <Table.Head>Status</Table.Head>
                 <Table.Head>Created By</Table.Head>
+                <Table.Head className="w-32">Actions</Table.Head>
               </Table.Row>
             </Table.Header>
             <Table.Body>
@@ -182,6 +240,29 @@ const JournalEntries = () => {
                   <Table.Cell>{getStatusBadge(entry.status)}</Table.Cell>
                   <Table.Cell className="text-muted-foreground">
                     {entry.postedBy?.name || 'System'}
+                  </Table.Cell>
+                  <Table.Cell>
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {['draft', 'validated'].includes((entry.status || '').toLowerCase()) && (
+                        <Button
+                          size="sm"
+                          loading={actingId === entry._id}
+                          onClick={(e) => handlePost(entry, e)}
+                        >
+                          Post
+                        </Button>
+                      )}
+                      {(entry.status || '').toLowerCase() === 'posted' && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          loading={actingId === entry._id}
+                          onClick={(e) => handleVoid(entry, e)}
+                        >
+                          Void
+                        </Button>
+                      )}
+                    </div>
                   </Table.Cell>
                 </Table.Row>
               ))}

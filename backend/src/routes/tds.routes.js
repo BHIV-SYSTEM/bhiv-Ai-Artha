@@ -6,6 +6,7 @@ import {
   getTDSEntries,
   recordTDSDeduction,
   recordChallanDeposit,
+  recordTDSFiling,
   getTDSSummary,
   getTDSDashboard,
   generateForm26Q,
@@ -63,6 +64,14 @@ router
     authorize('accountant', 'admin'),
     auditLogger('tds.challan_recorded', 'TDSEntry'),
     recordChallanDeposit
+  );
+
+router
+  .route('/entries/:id/file')
+  .post(
+    authorize('accountant', 'admin'),
+    auditLogger('tds.filing_recorded', 'TDSEntry'),
+    recordTDSFiling
   );
 
 export default router;

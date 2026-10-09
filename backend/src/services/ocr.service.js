@@ -1,9 +1,22 @@
 import logger from '../config/logger.js';
+import invoiceParser from './invoiceParser.service.js';
 import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { createRequire } from 'module';
+
+/** Extensions handled directly by the OCR service; all others delegate. */
+const IMAGE_EXTENSIONS = new Set([
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.gif',
+  '.webp',
+  '.bmp',
+  '.tif',
+  '.tiff',
+]);
 
 class OCRService {
   /**
@@ -18,7 +31,24 @@ class OCRService {
     logger.info(`OCR extractText: ${filePath} (ext=${ext})`);
 
     if (ext === '.pdf') return await this._extractFromPdf(filePath, opts.password);
-    return await this._extractFromImage(filePath);
+    if (IMAGE_EXTENSIONS.has(ext)) return await this._extractFromImage(filePath);
+
+    // DOCX / TXT / JSON / XML / spreadsheets / everything else: delegate to
+    // the universal extractor. Dynamic import keeps the module graph acyclic.
+    try {
+      const { default: documentExtractor } = await import('./documentExtractor.service.js');
+      const result = await documentExtractor.extract(filePath, opts);
+      return {
+        text: result.text || '',
+        pages: result.pages || 0,
+        info: result.info || {},
+        ocrConfidence: result.ocrConfidence ?? null,
+        ...(result.error ? { error: result.error, errorMessage: result.errorMessage } : {}),
+      };
+    } catch (err) {
+      logger.warn(`Universal extraction failed for ${ext}: ${err.message}`);
+      return { text: '', pages: 0, info: {}, error: 'extraction_failed', errorMessage: err.message };
+    }
   }
 
   /**
@@ -103,7 +133,13 @@ class OCRService {
 
   async _extractFromImage(filePath) {
     try {
-      const Tesseract = await import('tesseract.js');
+      const mod = await import('tesseract.js');
+      // tesseract.js is CJS; Node surfaces only some named exports, so the
+      // callable API lives on `default`.
+      const Tesseract = mod.default || mod;
+      if (typeof Tesseract.recognize !== 'function') {
+        throw new Error('tesseract.js API unavailable (recognize not exported)');
+      }
       // Language data host is configurable: the default jsdelivr CDN is not
       // reachable from all networks, projectnaptha's tessdata mirror is.
       const { data: { text, confidence } } = await Tesseract.recognize(filePath, 'eng', {
@@ -118,23 +154,31 @@ class OCRService {
   }
 
   parseText(rawText) {
+    const invoice = invoiceParser.parse(rawText);
     const vendor = this._extractVendor(rawText);
     const date = this._extractDate(rawText);
     const invoiceNumber = this._extractInvoiceNumber(rawText);
-    const taxAmount = this._extractTax(rawText);
-    const grossAmount = this._extractAmount(rawText);
+    const taxAmount = invoice.taxAmount !== null
+      ? invoice.taxAmount.toFixed(2)
+      : this._extractTax(rawText);
+    const grossAmount = invoice.total !== null
+      ? invoice.total.toFixed(2)
+      : this._extractAmount(rawText);
     const gstRate = this._extractGstRate(rawText);
     const gstin = this._extractGSTIN(rawText);
     const supplierState = this._deriveSupplierState(gstin);
+    const buyer = this._extractBuyer(rawText);
 
     // `amount` is the TAXABLE (pre-tax) value: the ledger treats amount as the
     // base and recomputes GST as amount * gstRate. If the receipt only shows a
     // grand total, subtract the tax so we never double-count it.
     const tax = parseFloat(taxAmount) || 0;
     const gross = parseFloat(grossAmount) || 0;
-    const taxableBase = this._extractTaxableBase(rawText);
+    const taxableBase = invoice.subtotal !== null
+      ? invoice.subtotal
+      : this._extractTaxableBase(rawText);
     let amount = gross;
-    if (taxableBase !== null) {
+    if (taxableBase !== null && taxableBase > 0) {
       amount = taxableBase;
     } else if (tax > 0 && gross > tax) {
       amount = gross - tax;
@@ -158,8 +202,20 @@ class OCRService {
       gstRate,
       gstin,
       supplierState,
+      buyer,
       invoiceNumber,
-      items: this._extractLineItems(rawText),
+      items: invoice.items.length
+        ? invoice.items.map((it) => ({
+          description: it.description,
+          hsn: it.hsn || '',
+          quantity: it.quantity,
+          unit: it.unit || '',
+          rate: it.rate,
+          amount: typeof it.amount === 'number' ? it.amount.toFixed(2) : it.amount,
+          taxRate: it.taxRate ?? null,
+          taxAmount: it.taxAmount ?? null,
+        }))
+        : this._extractLineItems(rawText),
       description: rawText.trim().substring(0, 300),
       confidence: this._calcConfidence(rawText, fields),
     };
@@ -246,6 +302,26 @@ class OCRService {
       if (line.length >= 3 && line.length <= 80 && /[A-Za-z]/.test(line) && !/^\d/.test(line)) return line;
     }
     return 'Unknown Vendor';
+  }
+
+  /** Buyer/customer block — "Bill To", "Consignee (Ship to)", "Sold To", ... */
+  _extractBuyer(text) {
+    const marker =
+      /(?:bill\s*to|sold\s*to|ship\s*to|deliver\s*to|invoice\s*to|consignee|consigntee|buyer|customer(?:\s*name)?|party(?:\s*name)?)\s*(?:\(\s*ship\s*to\s*\))?\s*[:\-]*\s*([^\n]{3,80})/i;
+    const m = String(text).match(marker);
+    if (!m?.[1]) return '';
+    let v = m[1]
+      .split(/\s+(?:gstin|uhn|pan|state\s*code|address|place\s*of\s*supply)/i)[0]
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (
+      v.length < 3 || v.length > 80 ||
+      !/[A-Za-z]{3}/.test(v) ||
+      /^\d+$/.test(v) ||
+      /^\d{2}[A-Z]{5}/.test(v) ||
+      /^(?:details|address|name)$/i.test(v)
+    ) return '';
+    return v;
   }
 
   _extractDate(text) {

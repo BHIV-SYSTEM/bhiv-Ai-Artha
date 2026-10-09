@@ -1,5 +1,4 @@
 import { parse } from 'csv-parse/sync';
-import mongoose from 'mongoose';
 import { randomUUID } from 'crypto';
 import BankStatement from '../models/BankStatement.js';
 import Expense from '../models/Expense.js';
@@ -8,6 +7,7 @@ import ChartOfAccounts from '../models/ChartOfAccounts.js';
 import ledgerService from './ledger.service.js';
 import cacheService from './cache.service.js';
 import ocrService from './ocr.service.js';
+import notificationEvent from './notificationEvent.service.js';
 import logger from '../config/logger.js';
 import fs from 'fs/promises';
 
@@ -17,8 +17,36 @@ class BankStatementService {
    */
   async uploadBankStatement(statementData, userId, file) {
     try {
+      const data = { ...statementData };
+      const blank = (v) =>
+        v === undefined || v === null || v === '' ||
+        (v instanceof Date && Number.isNaN(v.getTime()));
+
+      // Optional form fields: derive whatever the user left empty straight
+      // from the statement file so the model's required fields always hold.
+      const needsMeta = ['accountHolderName', 'startDate', 'endDate', 'openingBalance', 'closingBalance']
+        .some((k) => blank(data[k]));
+      if (needsMeta) {
+        let meta = null;
+        try {
+          meta = await this.extractDetailsFromFile(file);
+        } catch (err) {
+          logger.warn(`Statement metadata fallback skipped (${err.message})`);
+        }
+        if (blank(data.accountHolderName)) data.accountHolderName = meta?.accountHolderName || 'Not specified';
+        if (blank(data.openingBalance)) data.openingBalance = meta?.openingBalance || '0';
+        if (blank(data.closingBalance)) data.closingBalance = meta?.closingBalance || '0';
+        if (blank(data.startDate)) data.startDate = meta?.startDate || null;
+        if (blank(data.endDate)) data.endDate = meta?.endDate || null;
+        if (blank(data.startDate) || blank(data.endDate)) {
+          const today = new Date().toISOString().slice(0, 10);
+          if (blank(data.startDate)) data.startDate = today;
+          if (blank(data.endDate)) data.endDate = today;
+        }
+      }
+
       const statement = new BankStatement({
-        ...statementData,
+        ...data,
         file: {
           filename: file.filename,
           path: file.path,
@@ -234,6 +262,15 @@ class BankStatementService {
 
     await statement.save();
 
+    const unmatchedCount = statement.transactions.filter((t) => !t.matched).length;
+    if (unmatchedCount > 0) {
+      notificationEvent.reconciliationException({
+        statementNumber: statement.statementNumber || String(statement._id),
+        unmatched: unmatchedCount,
+        matched: statement.transactions.length - unmatchedCount,
+      }).catch(() => {});
+    }
+
     try {
       await cacheService.invalidateExpenseCaches();
       await cacheService.invalidateInvoiceCaches();
@@ -294,8 +331,8 @@ class BankStatementService {
       userId
     );
 
-    await ledgerService.validateJournalEntry(journalEntry._id, userId);
-    await ledgerService.postJournalEntry(journalEntry._id, userId);
+    // No silent posting: auto-created journals stay in draft until an
+    // authorized accountant validates and posts them via the ledger workflow.
 
     invoice.payments.push({
       amount: paymentAmount.toString(),
@@ -376,8 +413,7 @@ class BankStatementService {
         userId
       );
 
-      await ledgerService.validateJournalEntry(journalEntry._id, userId);
-      await ledgerService.postJournalEntry(journalEntry._id, userId);
+      // No silent posting: keep as draft for accountant review (A4).
       return journalEntry;
     } catch (err) {
       logger.warn(`Journal entry creation skipped: ${err.message}`);
@@ -618,44 +654,76 @@ class BankStatementService {
         relax_column_count: true,
       });
 
-      const transactions = records.map(record => {
+      // Banks disagree on column names — "Withdrawals (Dr)", "Dr", "Debit",
+      // "Narration", "Particulars"… Exact-name lookups silently read every
+      // value as 0 and the row then gets filtered out, so match keys
+      // case-insensitively against patterns instead.
+      const pick = (record, patterns) => {
+        const keys = Object.keys(record);
+        for (const re of patterns) {
+          const hit = keys.find((k) => re.test(String(k).toLowerCase().trim()));
+          if (hit !== undefined) return record[hit];
+        }
+        return undefined;
+      };
+      const toNumber = (v) => {
+        if (v === undefined || v === null || v === '') return 0;
+        // Strip thousands separators: parseFloat("5,000.00") === 5 otherwise.
+        const n = parseFloat(String(v).replace(/[,\s]/g, ''));
+        return Number.isFinite(n) ? n : 0;
+      };
+
+      const transactions = records.map((record) => {
         const date = this.parseDate(
-          record.Date ||
-            record['Transaction Date'] ||
-            record['Txn Date'] ||
+          pick(record, [/^date$/, /^(txn|transaction|value|posting|dated?) date$/]) ??
+            record.Date ??
+            record['Transaction Date'] ??
+            record['Txn Date'] ??
             record['Value Date']
         );
 
         const description =
-          record.Description ||
-          record['Particulars'] ||
-          record['Narration'] ||
-          record['Details'] ||
-          '';
+          pick(record, [
+            /^description$/,
+            /^narration$/,
+            /^particulars?$/,
+            /^details$/,
+            /^narrative$/,
+            /^remarks?$/,
+            /^(transaction|payment|narration) details$/,
+          ]) || '';
 
-        const debit = parseFloat(
-          record.Debit ||
-            record.Withdrawal ||
-            record.Out ||
-            record.Amount ||
-            0
-        );
+        let debit = toNumber(pick(record, [/withdraw/, /^dr\b/, /debit/, /^out\b/]));
+        let credit = toNumber(pick(record, [/deposit/, /^cr\b/, /credit/, /^in\b/]));
 
-        const credit = parseFloat(
-          record.Credit ||
-            record.Deposit ||
-            record.In ||
-            0
-        );
+        // Single-amount layouts: keep the historic "amount means debit"
+        // default, but honour an explicit sign or a Dr/Cr type column.
+        if (!debit && !credit) {
+          const raw = pick(record, [/^amount$/, /^amt$/, /^(txn|transaction) amount$/]);
+          const amt = toNumber(raw);
+          if (amt) {
+            const dir = pick(record, [/^(type|dr\/cr|cr\/dr|txn type|transaction type)$/]);
+            const negative = String(raw ?? '').trim().startsWith('-');
+            const creditTyped =
+              dir !== undefined && /^(c|cr|credit|deposit|in)\b/i.test(String(dir).trim());
+            if (negative || creditTyped) credit = Math.abs(amt);
+            else debit = amt;
+          }
+        }
 
         const reference =
-          record.Reference ||
-          record['Ref No'] ||
-          record['Cheque No'] ||
-          record['Txn Id'] ||
-          '';
+          pick(record, [
+            /^reference$/,
+            /^ref nos?$/,
+            /^ref$/,
+            /^cheque nos?$/,
+            /^check nos?$/,
+            /^txn ids?$/,
+            /^transaction ids?$/,
+            /^utr( nos?)?$/,
+          ]) || '';
 
-        const balance = parseFloat(record.Balance || record['Running Balance'] || 0);
+        const balance = toNumber(pick(record, [/^balance$/, /^running balance$/, /^closing balance$/]));
 
         const type = debit > 0 ? 'debit' : 'credit';
         const category = this.categorizeTransaction(description, type);
@@ -762,7 +830,7 @@ class BankStatementService {
         .filter(Boolean);
 
       const transactionStartPattern =
-        /^(\d+)\s+(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})\b/i;
+        /^(\d+)\s+(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2})\b/i;
       const amountPattern = /-?\d[\d,]*\.\d{2}/g;
 
       const openingBalanceMatch = text.match(/opening\s+balance[^\d-]*(-?\d[\d,]*\.\d{2})/i);
@@ -976,7 +1044,7 @@ class BankStatementService {
 
     dateStr = String(dateStr).trim();
 
-    const dmy = dateStr.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
+    const dmy = dateStr.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
     if (dmy) {
       const p1 = parseInt(dmy[1], 10);
       const p2 = parseInt(dmy[2], 10);
@@ -994,7 +1062,7 @@ class BankStatementService {
       return isNaN(date.getTime()) ? null : date;
     }
 
-    const ymd = dateStr.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/);
+    const ymd = dateStr.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
     if (ymd) {
       const date = new Date(
         parseInt(ymd[1], 10),

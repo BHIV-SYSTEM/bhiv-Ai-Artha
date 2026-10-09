@@ -121,6 +121,11 @@ toClientShape(settings) {
     if (data[field] == null) data[field] = '';
   }
   if (!data.name) data.name = data.companyName || '';
+  // Logo: legacy shape is { filename, path } — flatten to a plain string so
+  // the form can render it directly as <img src={logo}>.
+  if (data.logo && typeof data.logo === 'object') {
+    data.logo = data.logo.path || data.logo.filename || null;
+  }
   if (data.financialYear && (data.financialYear.startMonth == null || data.financialYear.startDay == null)) {
     data.financialYear = {
       startMonth: data.financialYear.startMonth ?? 4,

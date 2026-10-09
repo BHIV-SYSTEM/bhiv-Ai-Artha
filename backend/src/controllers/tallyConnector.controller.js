@@ -223,6 +223,30 @@ export const rotateCredentials = async (req, res) => {
   }
 };
 
+/** POST /tally-connect/credentials/revoke — disable this account's ingest keys. */
+export const revokeCredentials = async (req, res) => {
+  try {
+    const workspace = req.workspaceId;
+    if (!workspace) {
+      return res.status(400).json({ success: false, message: 'No workspace for this account' });
+    }
+    const cred = await TallyConnectorCredential.findOneAndUpdate(
+      { workspaceId: workspace },
+      { $set: { active: false } },
+      { new: true },
+    );
+    if (!cred) {
+      return res.status(404).json({ success: false, message: 'No credentials found for this account' });
+    }
+    res.json({
+      success: true,
+      data: { workspaceId: workspace, active: false, revokedAt: new Date().toISOString() },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Could not revoke credentials' });
+  }
+};
+
 export const syncStatus = async (req, res) => {
   res.json({ success: true, data: tallySyncScheduler.status() });
 };
@@ -257,4 +281,5 @@ export default {
   readonlyProof,
   getCredentials,
   rotateCredentials,
+  revokeCredentials,
 };

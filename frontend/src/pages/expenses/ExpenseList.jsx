@@ -25,6 +25,7 @@ import {
   EmptyState,
 } from '../../components/common';
 import api from '../../services/api';
+import { downloadCsv } from '../../utils/csv';
 import { formatCurrency, formatDate } from '../../utils/formatters';
 import { useCan } from '../../utils/permissions';
 
@@ -151,8 +152,27 @@ const ExpenseList = () => {
               onChange={(e) => setCategoryFilter(e.target.value)}
             />
           </div>
-          <Button variant="secondary" icon={Download}>
-            Export
+          <Button
+            variant="secondary"
+            icon={Download}
+            onClick={() => {
+              if (!filteredExpenses.length) return;
+              downloadCsv(
+                `expenses-${new Date().toISOString().split('T')[0]}`,
+                ['Description', 'Category', 'Vendor', 'Amount', 'Status', 'Date', 'Submitted By'],
+                filteredExpenses.map((exp) => [
+                  exp.description || '',
+                  exp.category || '',
+                  exp.vendor || '',
+                  exp.totalAmount ?? exp.amount ?? '',
+                  exp.status,
+                  exp.date || '',
+                  exp.submittedBy?.name || '',
+                ])
+              );
+            }}
+          >
+            Export CSV
           </Button>
         </div>
       </Card>

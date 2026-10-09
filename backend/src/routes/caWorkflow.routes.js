@@ -6,6 +6,8 @@ const router = express.Router();
 
 router.use(protect);
 
+router.get('/action-items', authorize('admin', 'accountant', 'viewer'), caWorkflowController.getActionItems);
+
 router.get('/periods', authorize('admin', 'accountant', 'viewer'), caWorkflowController.getPeriods);
 router.post('/periods', authorize('admin'), caWorkflowController.getOrCreatePeriod);
 router.post('/periods/:periodId/month-close', authorize('admin'), caWorkflowController.monthClose);

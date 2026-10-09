@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import './Counter.js';
 import Decimal from 'decimal.js';
-import companyScope from '../utils/companyScope.js';
+import companyScope, { getScope } from '../utils/companyScope.js';
 
 const validateDecimal = {
   validator: (v) => v === '' || v === null || v === undefined || (!isNaN(Number(v)) && isFinite(Number(v))),
@@ -111,6 +111,16 @@ const tdsEntrySchema = new mongoose.Schema({
     enum: ['pending', 'deducted', 'deposited', 'filed'],
     default: 'pending',
   },
+
+  // Government filing acknowledgement (recorded outside ARTHA; a generated
+  // form is NOT a filing until an acknowledgement is recorded here)
+  acknowledgementNumber: String,
+  filedDate: Date,
+  filingForm: {
+    type: String,
+    enum: ['26Q', '24Q', 'other'],
+  },
+  filingNotes: String,
   
   // Form 26AS reconciliation
   form26ASMatched: {
@@ -140,7 +150,11 @@ tdsEntrySchema.pre('save', async function(next) {
     const Counter = mongoose.model('Counter');
     const date = new Date();
     const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
-    const seq = await Counter.getNextSequence('tdsEntry', { date: dateStr });
+    const scope = getScope();
+    const wsKey = scope && scope.workspace ? String(scope.workspace) : null;
+    const seq = wsKey
+      ? await Counter.getNextSequence('tdsEntry', { ws: wsKey, date: dateStr }, { date: dateStr })
+      : await Counter.getNextSequence('tdsEntry', { date: dateStr });
     this.entryNumber = `TDS-${dateStr}-${String(seq).padStart(4, '0')}`;
   }
   

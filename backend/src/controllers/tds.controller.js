@@ -108,6 +108,30 @@ export const recordChallanDeposit = async (req, res) => {
   }
 };
 
+// @desc    Record a government TDS filing (acknowledgement)
+// @route   POST /api/v1/tds/entries/:id/file
+// @access  Private (accountant, admin)
+export const recordTDSFiling = async (req, res) => {
+  try {
+    const entry = await tdsService.recordTDSFiling(
+      req.params.id,
+      req.body,
+      req.user._id
+    );
+
+    res.json({
+      success: true,
+      data: entry,
+    });
+  } catch (error) {
+    logger.error('Record TDS filing error:', error);
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 // @desc    Get TDS summary
 // @route   GET /api/v1/tds/summary
 // @access  Private

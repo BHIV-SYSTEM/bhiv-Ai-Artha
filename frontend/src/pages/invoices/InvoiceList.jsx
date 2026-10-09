@@ -25,6 +25,7 @@ import {
   EmptyState,
 } from '../../components/common';
 import api from '../../services/api';
+import { downloadCsv } from '../../utils/csv';
 import { formatCurrency, formatDate } from '../../utils/formatters';
 import { useCan } from '../../utils/permissions';
 
@@ -127,8 +128,26 @@ const InvoiceList = () => {
               onChange={(e) => setStatusFilter(e.target.value)}
             />
           </div>
-          <Button variant="secondary" icon={Download}>
-            Export
+          <Button
+            variant="secondary"
+            icon={Download}
+            onClick={() => {
+              if (!filteredInvoices.length) return;
+              downloadCsv(
+                `invoices-${new Date().toISOString().split('T')[0]}`,
+                ['Invoice #', 'Customer', 'Amount', 'Status', 'Due Date', 'Created'],
+                filteredInvoices.map((inv) => [
+                  inv.invoiceNumber,
+                  inv.customerName || '',
+                  inv.totalAmount,
+                  inv.status,
+                  inv.dueDate || '',
+                  inv.createdAt || '',
+                ])
+              );
+            }}
+          >
+            Export CSV
           </Button>
         </div>
       </Card>

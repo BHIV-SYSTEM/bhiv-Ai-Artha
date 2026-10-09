@@ -10,6 +10,14 @@ class NotificationEventService {
    * Also pushes to all active web subscribers for device-level notifications.
    */
   async _create(data) {
+    // The super admin owns the platform, not day-to-day bookkeeping: never
+    // push finance events (invoice/expense/reconciliation …) into their bell.
+    // Platform events (category 'system') still reach them. Tenant users are
+    // unaffected — their notifications live in their own workspace.
+    if (data.category === 'finance' && getScope()?.role === 'admin') {
+      return;
+    }
+
     let notification;
     try {
       notification = await Notification.create({
@@ -241,6 +249,32 @@ class NotificationEventService {
       data: { tdsId: tdsEntry._id, entryNumber: tdsEntry.entryNumber },
     });
   }
+
+  async filingStatusUpdated(meta = {}) {
+    const { regime, reference, status, acknowledgementNumber, period } = meta;
+    await this._create({
+      title: `Filing status updated: ${regime || 'Compliance'}`,
+      body: `${reference || period || 'Return'} ${status || 'updated'}${acknowledgementNumber ? ` — ARN ${acknowledgementNumber}` : ''}`,
+      type: status === 'filed' || status === 'accepted' ? 'success' : 'info',
+      category: 'compliance',
+      link: regime === 'TDS' ? `/tds` : `/gst`,
+      data: { ...meta },
+    });
+  }
+
+  async reconciliationException(meta = {}) {
+    const { statementNumber, unmatched, matched } = meta;
+    if (!unmatched) return;
+    await this._create({
+      title: 'Reconciliation needs review',
+      body: `Statement ${statementNumber || ''} has ${unmatched} unmatched transaction(s) (${matched || 0} matched). Review and post the draft entries.`,
+      type: 'warning',
+      category: 'finance',
+      link: `/statements`,
+      data: { ...meta },
+    });
+  }
+
 
   // ─── Tally Sync Events ──────────────────────────────────────────
 

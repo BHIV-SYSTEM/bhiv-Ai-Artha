@@ -40,22 +40,53 @@ const FILE_TYPE_ICONS = {
   'image/png': Image,
   'image/jpg': Image,
   'image/webp': Image,
+  'image/gif': Image,
+  'image/bmp': Image,
+  'image/tiff': Image,
   'application/pdf': FileText,
   'text/csv': FileSpreadsheet,
+  'text/tab-separated-values': FileSpreadsheet,
   'application/vnd.ms-excel': FileSpreadsheet,
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': FileSpreadsheet,
+  'application/msword': FileText,
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': FileText,
+  'text/plain': FileText,
+  'text/markdown': FileText,
+  'application/json': FileText,
+  'text/html': FileText,
 };
+
+// Mirrors ALLOWED_EXTENSIONS on the backend document extractor.
+const ACCEPTED_EXTENSIONS = [
+  'pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff',
+  'txt', 'md', 'log', 'csv', 'tsv', 'json', 'xml', 'html', 'htm',
+  'doc', 'docx', 'xls', 'xlsx',
+];
+const ACCEPT_ATTR = ACCEPTED_EXTENSIONS.map((ext) => `.${ext}`).join(',');
 
 const TYPE_COLORS = {
   bank_statement: 'bg-blue-500/10 text-blue-600 border-blue-200',
   bill: 'bg-amber-500/10 text-amber-600 border-amber-200',
   receipt: 'bg-emerald-500/10 text-emerald-600 border-emerald-200',
+  document: 'bg-violet-500/10 text-violet-600 border-violet-200',
+  invoice: 'bg-cyan-500/10 text-cyan-600 border-cyan-200',
 };
 const TYPE_LABELS = {
   bank_statement: 'Bank Statement',
-  bill: 'Bill / Invoice',
+  bill: 'Bill / Purchase',
   receipt: 'Receipt / Expense',
+  document: 'Document',
+  invoice: 'Sales Invoice',
 };
+
+// Optional "process as" override — Auto keeps the backend's own detection.
+const DOC_TYPE_OPTIONS = [
+  { value: '', label: 'Auto-detect' },
+  { value: 'invoice', label: 'Sales invoice' },
+  { value: 'receipt', label: 'Expense / receipt' },
+  { value: 'bank_statement', label: 'Bank statement' },
+  { value: 'document', label: 'Document only' },
+];
 
 const CATEGORY_LABELS = {
   travel: 'Travel', meals: 'Meals & Entertainment', supplies: 'Office Supplies',
@@ -64,7 +95,7 @@ const CATEGORY_LABELS = {
   equipment: 'Equipment', software: 'Software', other: 'Other',
 };
 
-const SmartUpload = () => {
+const SmartUpload = ({ embedded = false } = {}) => {
   const navigate = useNavigate();
   const [files, setFiles] = useState([]);
   const [dragActive, setDragActive] = useState(false);
@@ -77,6 +108,7 @@ const SmartUpload = () => {
   const [approvedIds, setApprovedIds] = useState(new Set());
   const [passwords, setPasswords] = useState({});
   const [retrying, setRetrying] = useState(new Set());
+  const [forcedType, setForcedType] = useState('');
 
   const handleDrag = useCallback((e) => {
     e.preventDefault();
@@ -92,10 +124,9 @@ const SmartUpload = () => {
   }, []);
 
   const addFiles = (newFiles) => {
-    const validExt = ['jpg', 'jpeg', 'png', 'webp', 'pdf', 'csv', 'xls', 'xlsx'];
     const valid = newFiles.filter((f) => {
-      const ext = f.name.split('.').pop().toLowerCase();
-      return validExt.includes(ext) && f.size <= 25 * 1024 * 1024;
+      const ext = f.name.includes('.') ? f.name.split('.').pop().toLowerCase() : '';
+      return ACCEPTED_EXTENSIONS.includes(ext) && f.size <= 25 * 1024 * 1024;
     });
     if (valid.length < newFiles.length) toast.error('Some files were skipped (unsupported type or > 25MB)');
     setFiles((prev) => [...prev, ...valid].slice(0, 10));
@@ -118,6 +149,7 @@ const SmartUpload = () => {
       try {
         const fd = new FormData();
         fd.append('file', files[i]);
+        if (forcedType) fd.append('documentType', forcedType);
         const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
         out.push({ fileName: files[i].name, success: true, data: res.data.data });
       } catch (err) {
@@ -177,10 +209,10 @@ const SmartUpload = () => {
     if (!file) return;
 
     setRetrying((p) => new Set([...p, index]));
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      fd.append('password', pw);
+    try {        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('password', pw);
+        if (forcedType) fd.append('documentType', forcedType);
       const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setResults((prev) => prev.map((r, i) => i === index ? { fileName: file.name, success: true, data: res.data.data } : r));
       toast.success('PDF unlocked & data extracted!');
@@ -203,16 +235,20 @@ const SmartUpload = () => {
   const expensesCount = results.filter(
     (r) => r.success && (r.data?.documentType === 'receipt' || r.data?.documentType === 'bill')
   ).length;
+  const invoicesCount = results.filter((r) => r.success && r.data?.documentType === 'invoice').length;
+  const documentsCount = results.filter((r) => r.success && r.data?.documentType === 'document').length;
   const totalAmount = results
     .filter((r) => r.success && r.data?.summary?.amount)
     .reduce((s, r) => s + parseFloat(r.data.summary.amount || 0), 0);
 
   return (
     <div className="space-y-6 animate-fadeIn">
-      <PageHeader
-        title="Smart Upload"
-        description="Drop any document — see all extracted data below — approve here and go to Expenses"
-      />
+      {!embedded && (
+        <PageHeader
+          title="Smart Upload"
+          description="Drop any document — see all extracted data below — approve here and go to Expenses"
+        />
+      )}
 
       {/* ─── Upload Zone ─────────────────────────────────── */}
       <Card>
@@ -232,13 +268,27 @@ const SmartUpload = () => {
           </div>
           <h3 className="text-lg font-semibold text-foreground mb-1">Drop any file here</h3>
           <p className="text-sm text-muted-foreground mb-4">
-            Bank statements (CSV, Excel, PDF) &bull; Bills &amp; receipts (images, PDF) &bull; Up to 10 files
+            Invoices &amp; receipts (images, PDF) &bull; Bank statements (CSV, Excel, PDF) &bull; Documents (DOCX, TXT, JSON, HTML) &bull; Up to 10 files
           </p>
           <label className="inline-flex items-center gap-2 px-6 py-2.5 bg-primary text-primary-foreground rounded-xl font-medium cursor-pointer hover:bg-primary/90 transition-all hover:shadow-lg hover:shadow-primary/20">
             <Upload className="w-4 h-4" />
             Browse Files
-            <input type="file" className="hidden" multiple accept=".jpg,.jpeg,.png,.webp,.pdf,.csv,.xls,.xlsx" onChange={(e) => addFiles(Array.from(e.target.files))} />
+            <input type="file" className="hidden" multiple accept={ACCEPT_ATTR} onChange={(e) => addFiles(Array.from(e.target.files))} />
           </label>
+
+          {/* Optional processing override */}
+          <div className="mt-5 inline-flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Process files as</span>
+            <select
+              value={forcedType}
+              onChange={(e) => setForcedType(e.target.value)}
+              className="px-3 py-1.5 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            >
+              {DOC_TYPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {/* File chips before processing */}
@@ -273,11 +323,13 @@ const SmartUpload = () => {
 
       {/* ─── Stat counters ───────────────────────────────── */}
       {hasResults && (
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-4">
           {[
             { label: 'Processed', value: results.filter((r) => r.success).length, icon: CheckCircle, color: 'text-success' },
             { label: 'Expenses', value: expensesCount, icon: Receipt, color: 'text-amber-500' },
+            { label: 'Invoices', value: invoicesCount, icon: FileText, color: 'text-cyan-500' },
             { label: 'Statements', value: statementsCount, icon: CreditCard, color: 'text-blue-500' },
+            { label: 'Documents', value: documentsCount, icon: FileText, color: 'text-violet-500' },
             { label: 'Approved', value: approvedCount, icon: ShieldCheck, color: 'text-emerald-500' },
             { label: 'Total Amount', value: `₹${totalAmount.toLocaleString('en-IN')}`, icon: IndianRupee, color: 'text-primary' },
           ].map((s) => (
@@ -342,6 +394,8 @@ const SmartUpload = () => {
             const s = d?.summary || {};
             const isSt = d?.documentType === 'bank_statement';
             const isExp = d?.documentType === 'receipt' || d?.documentType === 'bill';
+            const isInv = d?.documentType === 'invoice';
+            const isDoc = d?.documentType === 'document';
             const eid = s.expenseId;
             const approved = s.status === 'approved' || approvedIds.has(eid);
             const approving = approvingIds.has(eid);
@@ -359,6 +413,8 @@ const SmartUpload = () => {
                       : needsPassword ? <Lock className="w-5 h-5 text-amber-500" />
                       : approved ? <CheckCircle2 className="w-5 h-5 text-success" />
                       : isSt ? <CreditCard className="w-5 h-5 text-blue-500" />
+                      : isDoc ? <FileText className="w-5 h-5 text-violet-500" />
+                      : isInv ? <FileText className="w-5 h-5 text-cyan-500" />
                       : <Receipt className="w-5 h-5 text-amber-500" />}
                   </div>
                   <div className="flex-1 min-w-0">
@@ -377,6 +433,7 @@ const SmartUpload = () => {
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {isExp && s.amount && <span className="text-base font-bold text-foreground">₹{parseFloat(s.amount).toLocaleString('en-IN')}</span>}
+                    {isInv && s.amount && <span className="text-base font-bold text-foreground">₹{parseFloat(s.amount).toLocaleString('en-IN')}</span>}
                     {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
                   </div>
                 </div>
@@ -454,9 +511,19 @@ const SmartUpload = () => {
                             </div>
                             <div className="space-y-1">
                               {s.lineItems.map((item, li) => (
-                                <div key={li} className="flex items-center justify-between text-sm py-1 border-b border-border/40 last:border-0">
-                                  <span className="text-foreground">{item.description}</span>
-                                  <span className="font-semibold text-foreground ml-4 flex-shrink-0">₹{parseFloat(item.amount).toLocaleString('en-IN')}</span>
+                                <div key={li} className="flex items-center justify-between gap-3 text-sm py-1 border-b border-border/40 last:border-0">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    {item.hsn && (
+                                      <span className="text-[10px] font-mono text-muted-foreground flex-shrink-0">{item.hsn}</span>
+                                    )}
+                                    <span className="text-foreground truncate">{item.description}</span>
+                                  </div>
+                                  {item.quantity != null && item.rate != null && (
+                                    <span className="text-xs text-muted-foreground flex-shrink-0 tabular-nums">
+                                      {item.quantity}{item.unit ? ` ${item.unit}` : ''} × ₹{parseFloat(item.rate).toLocaleString('en-IN')}
+                                    </span>
+                                  )}
+                                  <span className="font-semibold text-foreground flex-shrink-0 tabular-nums">₹{parseFloat(item.amount).toLocaleString('en-IN')}</span>
                                 </div>
                               ))}
                             </div>
@@ -526,6 +593,81 @@ const SmartUpload = () => {
                       </>
                     )}
 
+                    {/* — Sales Invoice — */}
+                    {isInv && (
+                      <>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                          <Field icon={Store} label="Customer" value={s.customerName} />
+                          <Field icon={IndianRupee} label="Total" value={s.amount ? `₹${parseFloat(s.amount).toLocaleString('en-IN')}` : '—'} highlight />
+                          <Field icon={IndianRupee} label="Tax / GST" value={s.taxAmount && s.taxAmount !== '0' ? `₹${parseFloat(s.taxAmount).toLocaleString('en-IN')}` : '₹0'} />
+                          <Field icon={CalendarDays} label="Invoice Date" value={s.date ? new Date(s.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'} />
+                          <Field icon={Hash} label="Invoice #" value={s.invoiceNumber} />
+                          <Field icon={Clock} label="Status" value="Draft — review in Invoices" valueClass="text-cyan-500" />
+                          {s.ocrConfidence != null && <Field icon={Eye} label="OCR Confidence" value={`${Math.round(s.ocrConfidence)}%`} />}
+                        </div>
+
+                        {/* Line items from document */}
+                        {s.lineItems?.length > 0 && (
+                          <div className="p-3 bg-muted/40 rounded-xl">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Layers className="w-3.5 h-3.5 text-muted-foreground" />
+                              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Line Items ({s.lineItems.length})</span>
+                            </div>
+                            <div className="space-y-1">
+                              {s.lineItems.map((item, li) => (
+                                <div key={li} className="flex items-center justify-between gap-3 text-sm py-1 border-b border-border/40 last:border-0">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    {item.hsn && (
+                                      <span className="text-[10px] font-mono text-muted-foreground flex-shrink-0">{item.hsn}</span>
+                                    )}
+                                    <span className="text-foreground truncate">{item.description}</span>
+                                  </div>
+                                  {item.quantity != null && item.rate != null && (
+                                    <span className="text-xs text-muted-foreground flex-shrink-0 tabular-nums">
+                                      {item.quantity}{item.unit ? ` ${item.unit}` : ''} × ₹{parseFloat(item.rate).toLocaleString('en-IN')}
+                                    </span>
+                                  )}
+                                  <span className="font-semibold text-foreground flex-shrink-0 tabular-nums">₹{parseFloat(item.amount).toLocaleString('en-IN')}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {rawText && (
+                          <div>
+                            <button onClick={(e) => { e.stopPropagation(); toggleRaw(index); }} className="flex items-center gap-2 text-xs font-medium text-primary hover:underline mb-2">
+                              <FileSearch className="w-3.5 h-3.5" />
+                              {rawOpen ? 'Hide' : 'Show'} Full Document Text ({rawText.length} chars)
+                            </button>
+                            {rawOpen && (
+                              <div className="p-4 bg-muted/50 rounded-xl border border-border max-h-96 overflow-auto">
+                                <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed">{rawText}</pre>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">Processing Steps</p>
+                          {d?.actions?.map((a, ai) => (
+                            <div key={ai} className="flex items-start gap-2 text-xs bg-muted/30 rounded-lg p-2.5">
+                              {a.type === 'invoice_created' || a.type === 'extraction_completed' ? <CheckCircle className="w-3.5 h-3.5 text-success mt-0.5 flex-shrink-0" />
+                                : a.type === 'extraction_failed' || a.type === 'extraction_error' || a.type === 'no_text_found' ? <AlertCircle className="w-3.5 h-3.5 text-amber-500 mt-0.5 flex-shrink-0" />
+                                : <Zap className="w-3.5 h-3.5 text-primary mt-0.5 flex-shrink-0" />}
+                              <span className="text-muted-foreground">{a.message}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {s.invoiceId && (
+                          <Button variant="outline" onClick={(e) => { e.stopPropagation(); navigate('/invoices'); }} className="gap-2">
+                            <ArrowRight className="w-4 h-4" /> Go to Invoices
+                          </Button>
+                        )}
+                      </>
+                    )}
+
                     {/* — Bank Statement — */}
                     {isSt && (
                       <>
@@ -547,6 +689,47 @@ const SmartUpload = () => {
                         )}
                       </>
                     )}
+
+                    {/* — Generic document (DOCX, TXT, JSON, HTML, ...) — */}
+                    {isDoc && (
+                      <>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                          <Field icon={FileText} label="Format" value={(s.category || '').toUpperCase() || '—'} />
+                          <Field icon={Layers} label="Pages" value={s.pages ?? '—'} />
+                          <Field icon={Layers} label="Sections" value={s.sections ?? '—'} />
+                          <Field icon={Hash} label="Characters" value={s.charCount != null ? Number(s.charCount).toLocaleString('en-IN') : '—'} />
+                          <Field icon={Eye} label="Method" value={s.method || '—'} />
+                          <Field icon={FileSearch} label="OCR" value={d?.ocrFallback ? 'Yes (fallback)' : 'Not needed'} valueClass={d?.ocrFallback ? 'text-amber-500' : 'text-success'} />
+                          <Field icon={CheckCircle} label="Status" value={s.status === 'extracted' ? 'Content extracted' : s.status === 'empty' ? 'No readable text' : s.status} valueClass={s.status === 'extracted' ? 'text-success' : 'text-amber-500'} />
+                        </div>
+
+                        {rawText && (
+                          <div>
+                            <button onClick={(e) => { e.stopPropagation(); toggleRaw(index); }} className="flex items-center gap-2 text-xs font-medium text-primary hover:underline mb-2">
+                              <FileSearch className="w-3.5 h-3.5" />
+                              {rawOpen ? 'Hide' : 'Show'} Extracted Text ({rawText.length} chars)
+                            </button>
+                            {rawOpen && (
+                              <div className="p-4 bg-muted/50 rounded-xl border border-border max-h-96 overflow-auto">
+                                <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed">{rawText}</pre>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">Processing Steps</p>
+                          {d?.actions?.map((a, ai) => (
+                            <div key={ai} className="flex items-start gap-2 text-xs bg-muted/30 rounded-lg p-2.5">
+                              {a.type === 'extraction_completed' || a.type === 'ocr_fallback' ? <Eye className="w-3.5 h-3.5 text-info mt-0.5 flex-shrink-0" />
+                                : a.type === 'no_text_found' || a.type === 'unsupported_format' ? <AlertCircle className="w-3.5 h-3.5 text-amber-500 mt-0.5 flex-shrink-0" />
+                                : <Zap className="w-3.5 h-3.5 text-primary mt-0.5 flex-shrink-0" />}
+                              <span className="text-muted-foreground">{a.message}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </Card>
@@ -559,8 +742,8 @@ const SmartUpload = () => {
       {!hasResults && !files.length && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { icon: Upload, title: '1. Drop any file', desc: 'Images, PDFs, CSV, Excel — all formats accepted' },
-            { icon: Zap, title: '2. Auto-detect', desc: 'System identifies bank statement vs bill vs receipt' },
+            { icon: Upload, title: '1. Drop any file', desc: 'Images, PDFs, Excel, DOCX, TXT, JSON — all formats accepted' },
+            { icon: Zap, title: '2. Auto-detect', desc: 'System identifies bank statement vs bill vs receipt vs document' },
             { icon: FileSearch, title: '3. See all data', desc: 'Full extracted content shown below — vendor, amount, date, raw text' },
             { icon: ShieldCheck, title: '4. Approve & go', desc: 'Approve here, numbers update everywhere, then go to Expenses' },
           ].map((step, i) => (

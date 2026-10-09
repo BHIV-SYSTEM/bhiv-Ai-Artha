@@ -2,6 +2,7 @@ import Dealer from '../models/Dealer.js';
 import TallyParty from '../models/TallyParty.js';
 import TallyOutstanding from '../models/TallyOutstanding.js';
 import TallyVoucher from '../models/TallyVoucher.js';
+import crypto from 'node:crypto';
 import logger from '../config/logger.js';
 import notificationEvent from './notificationEvent.service.js';
 
@@ -149,6 +150,108 @@ class DealerService {
     notificationEvent.dealerSyncComplete(created, updated).catch(() => {});
 
     return { created, updated, total: tallyParties.length };
+  }
+
+  async syncFromSetu() {
+    const secret = process.env.SETU_HMAC_SECRET;
+    if (!secret) throw new Error('SETU_HMAC_SECRET is not configured');
+
+    const base = (process.env.SETU_SYNC_BASE_URL || process.env.SETU_BASE_URL || 'http://localhost:8000').replace(/\/+$/, '');
+    const body = JSON.stringify({ purpose: 'dealer-directory' });
+    const signature = crypto.createHmac('sha256', secret).update(body).digest('hex');
+
+    let response;
+    try {
+      response = await fetch(`${base}/api/setu/dealer-directory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Setu-Signature': signature },
+        body,
+        signal: AbortSignal.timeout(parseInt(process.env.SETU_SYNC_TIMEOUT_MS || '10000', 10)),
+      });
+    } catch (err) {
+      const reason = err.name === 'TimeoutError' || err.name === 'AbortError' ? 'timed out' : (err.cause?.code || err.message);
+      throw new Error(`SETU is unreachable (${reason})`);
+    }
+
+    let parsed = null;
+    try {
+      parsed = await response.json();
+    } catch {
+      parsed = null;
+    }
+    if (!response.ok || !parsed?.success) {
+      throw new Error(parsed?.message || `SETU responded with HTTP ${response.status}`);
+    }
+
+    const entries = Array.isArray(parsed.data?.dealers) ? parsed.data.dealers : [];
+
+    // Same env-driven defaults as the Tally sync — no hardcoded locations.
+    const defaultLat = parseFloat(process.env.DEMO_DEFAULT_LAT) || null;
+    const defaultLng = parseFloat(process.env.DEMO_DEFAULT_LNG) || null;
+    const defaultCity = process.env.DEMO_DEFAULT_CITY || '';
+    const defaultState = process.env.DEMO_DEFAULT_STATE || '';
+    const defaultRegion = process.env.DEMO_DEFAULT_REGION || defaultCity || '';
+
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const entry of entries) {
+      const gstin = String(entry.gstin || '').trim().toUpperCase();
+      const email = String(entry.email || '').trim().toLowerCase();
+      const or = [];
+      if (entry.setuCustomerId) or.push({ setuCustomerId: entry.setuCustomerId });
+      if (gstin) or.push({ gstin });
+      if (email) or.push({ email });
+
+      const existing = or.length > 0 ? await Dealer.findOne({ $or: or }) : null;
+
+      if (existing) {
+        if (entry.name) {
+          existing.name = entry.name;
+          if (!existing.displayName) existing.displayName = entry.name;
+        }
+        if (entry.contactPerson) existing.contactPerson = entry.contactPerson;
+        if (email) existing.email = email;
+        if (entry.phone) existing.phone = entry.phone;
+        if (entry.address) existing.address = entry.address;
+        if (gstin) existing.gstin = gstin;
+        if (entry.setuCustomerId && !existing.setuCustomerId) existing.setuCustomerId = entry.setuCustomerId;
+        await existing.save();
+        updated++;
+        continue;
+      }
+
+      if (!entry.name) {
+        skipped++;
+        continue;
+      }
+
+      const jitterLat = defaultLat ? defaultLat + (Math.random() - 0.5) * 0.02 : null;
+      const jitterLng = defaultLng ? defaultLng + (Math.random() - 0.5) * 0.02 : null;
+
+      await this.createDealer({
+        name: entry.name,
+        displayName: entry.name,
+        contactPerson: entry.contactPerson || '',
+        email,
+        phone: entry.phone || '',
+        address: entry.address || '',
+        city: defaultCity,
+        state: defaultState,
+        region: defaultRegion,
+        latitude: jitterLat,
+        longitude: jitterLng,
+        gstin,
+        setuCustomerId: entry.setuCustomerId || '',
+      });
+      created++;
+    }
+
+    logger.info(`Dealer sync from SETU: ${created} created, ${updated} updated, ${skipped} skipped`);
+    notificationEvent.dealerSyncComplete(created, updated).catch(() => {});
+
+    return { created, updated, skipped, total: entries.length, source: 'setu' };
   }
 
   async syncOutstandingFromTally() {

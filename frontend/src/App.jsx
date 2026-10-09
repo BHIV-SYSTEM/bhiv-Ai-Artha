@@ -1,5 +1,5 @@
 import { useEffect, lazy, Suspense } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 
 import ErrorBoundary from './components/common/ErrorBoundary';
@@ -9,6 +9,7 @@ import AuthLayout from './components/layout/AuthLayout';
 import Login from './pages/auth/Login';
 
 import FinancialIntelligenceDashboard from './pages/dashboard/FinancialIntelligenceDashboard';
+import PlatformDashboard from './pages/platform/PlatformDashboard';
 import TallyConnect from './pages/tally/TallyConnect';
 
 import InvoiceList from './pages/invoices/InvoiceList';
@@ -39,12 +40,6 @@ import StatementsUpload from './pages/statements/StatementsUpload';
 import StatementDetail from './pages/statements/StatementDetail';
 
 import DataIngestion from './pages/ingestion/DataIngestion';
-
-import DealerList from './pages/dealers/DealerList';
-import DealerDetail from './pages/dealers/DealerDetail';
-const StoreAccountStatement = lazy(() => import('./pages/dealers/StoreAccountStatement'));
-import SalesAgentList from './pages/agents/SalesAgentList';
-import SalesAgentDetail from './pages/agents/SalesAgentDetail';
 
 import CompanySettings from './pages/settings/CompanySettings';
 import UserManagement from './pages/settings/UserManagement';
@@ -143,6 +138,25 @@ const PublicRoute = ({ children }) => {
   return children;
 };
 
+// The super admin (single platform owner: raw role 'admin', no company)
+// manages tenants - they get the technical platform dashboard, never the
+// tenant business UI.
+const isSuperAdminUser = (user) => user?.role === 'admin' && !user?.companyId;
+
+const SuperAwareDashboard = () => {
+  const { user } = useAuthStore();
+  return isSuperAdminUser(user) ? <PlatformDashboard /> : <FinancialIntelligenceDashboard />;
+};
+
+// Pathless route guard: business pages are for tenant workspaces only.
+const TenantOnly = () => {
+  const { user } = useAuthStore();
+  if (isSuperAdminUser(user)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <Outlet />;
+};
+
 function App() {
   const { checkAuth } = useAuthStore();
 
@@ -158,9 +172,10 @@ function App() {
         </Route>
 
         <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-          <Route path="/dashboard" element={<FinancialIntelligenceDashboard />} />
+          <Route path="/dashboard" element={<SuperAwareDashboard />} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
+          <Route element={<TenantOnly />}>
           <Route path="/tally" element={<TallyConnect />} />
 
           <Route path="/invoices" element={<InvoiceList />} />
@@ -190,21 +205,19 @@ function App() {
           <Route path="/signals" element={<RoleProtectedRoute allowedRoles={['admin', 'accountant']}><SignalDashboard /></RoleProtectedRoute>} />
 
           <Route path="/ingestion" element={<RoleProtectedRoute allowedRoles={['admin', 'accountant']}><DataIngestion /></RoleProtectedRoute>} />
+          {/* Smart Upload now lives as a tab inside Data Ingestion */}
+          <Route path="/smart-upload" element={<Navigate to="/ingestion" replace />} />
 
-          <Route path="/dealers" element={<DealerList />} />
-          <Route path="/dealers/new" element={<RoleProtectedRoute allowedRoles={['admin', 'accountant']}><DealerList /></RoleProtectedRoute>} />
-          <Route path="/dealers/:id" element={<DealerDetail />} />
-          <Route path="/dealers/:id/edit" element={<RoleProtectedRoute allowedRoles={['admin', 'accountant']}><DealerDetail /></RoleProtectedRoute>} />
-          <Route path="/dealers/:id/statement" element={<LazyLoad><StoreAccountStatement /></LazyLoad>} />
-          <Route path="/agents" element={<SalesAgentList />} />
-          <Route path="/agents/new" element={<RoleProtectedRoute allowedRoles={['admin']}><SalesAgentList /></RoleProtectedRoute>} />
-          <Route path="/agents/:id" element={<SalesAgentDetail />} />
+          {/* Dealer/agent sections removed — handled by Setu; keep old links working */}
+          <Route path="/dealers/*" element={<Navigate to="/statements" replace />} />
+          <Route path="/agents/*" element={<Navigate to="/dashboard" replace />} />
 
           <Route path="/statements" element={<StatementsList />} />
           <Route path="/statements/upload" element={<RoleProtectedRoute allowedRoles={['admin', 'accountant']}><StatementsUpload /></RoleProtectedRoute>} />
           <Route path="/statements/:id" element={<StatementDetail />} />
 
           <Route path="/settings/company" element={<RoleProtectedRoute allowedRoles={['admin']}><CompanySettings /></RoleProtectedRoute>} />
+          </Route>
           <Route path="/settings/users" element={<RoleProtectedRoute allowedRoles={['admin']}><UserManagement /></RoleProtectedRoute>} />
 
           <Route path="/notifications" element={<NotificationsPage />} />

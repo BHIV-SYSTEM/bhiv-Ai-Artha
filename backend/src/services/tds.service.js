@@ -59,8 +59,12 @@ class TDSService {
         entryData.tdsRate = calculation.tdsRate;
       }
       
-      // Determine quarter and FY
-      const date = new Date(entryData.transactionDate);
+      // Determine quarter and FY — fall back to today when the caller omits
+      // or sends an invalid transactionDate (it used to derive "FYNaN-aN",
+      // which can never match any dashboard filter).
+      let date = new Date(entryData.transactionDate);
+      if (Number.isNaN(date.getTime())) date = new Date();
+      entryData.transactionDate = date;
       const month = date.getMonth() + 1;
       const year = date.getFullYear();
       
@@ -132,6 +136,42 @@ class TDSService {
    * Record TDS deduction in ledger
    */
   async recordTDSDeduction(tdsId, userId) {
+    // Resolve (and if needed create) the ledger accounts BEFORE opening the
+    // transaction. ledgerService.createJournalEntry / validate / post each run
+    // their own transaction, and a transaction cannot see accounts created
+    // inside this one while uncommitted — that made validateAccounts fail
+    // with "Required accounts not found" and rolled the whole deduction back.
+    const bootstrap = await TDSEntry.findById(tdsId);
+    if (!bootstrap) {
+      throw new Error('TDS entry not found');
+    }
+
+    let expenseAccount = bootstrap.expenseAccount
+      ? await ChartOfAccounts.findById(bootstrap.expenseAccount)
+      : await ChartOfAccounts.findOne({ code: '6700' });
+    if (!expenseAccount) {
+      throw new Error('Expense account not found');
+    }
+
+    let tdsPayableAccount = await ChartOfAccounts.findOne({ code: '2300' });
+    if (!tdsPayableAccount) {
+      tdsPayableAccount = (await ChartOfAccounts.create([{
+        code: '2300',
+        name: 'TDS Payable',
+        type: 'Liability',
+        subtype: 'Current Liability',
+        normalBalance: 'credit',
+        description: 'Tax Deducted at Source - Payable to Government',
+      }]))[0];
+    }
+
+    let cashAccount = await ChartOfAccounts.findOne({ code: '1010' });
+    if (!cashAccount) {
+      cashAccount = (await ChartOfAccounts.create([{
+        code: '1010', name: 'Bank Account', type: 'Asset', subtype: 'Current Asset', normalBalance: 'debit',
+      }]))[0];
+    }
+
     const session = await mongoose.startSession();
     session.startTransaction();
     
@@ -146,39 +186,8 @@ class TDSService {
         throw new Error('Only pending TDS entries can be recorded');
       }
       
-      // Get accounts
-      let expenseAccount = tdsEntry.expenseAccount;
-      if (!expenseAccount) {
-        // Default to professional fees
-        expenseAccount = await ChartOfAccounts.findOne({ code: '6700' }).session(session);
-      } else {
-        expenseAccount = await ChartOfAccounts.findById(expenseAccount).session(session);
-      }
-      
-      // Get or create TDS Payable account
-      let tdsPayableAccount = await ChartOfAccounts.findOne({ 
-        code: '2300' 
-      }).session(session);
-      
-      if (!tdsPayableAccount) {
-        tdsPayableAccount = await ChartOfAccounts.create([{
-          code: '2300',
-          name: 'TDS Payable',
-          type: 'Liability',
-          subtype: 'Current Liability',
-          normalBalance: 'credit',
-          description: 'Tax Deducted at Source - Payable to Government',
-        }], { session });
-        tdsPayableAccount = tdsPayableAccount[0];
-      }
-      
-      let cashAccount = await ChartOfAccounts.findOne({ code: '1010' }).session(session);
-      
-      if (!cashAccount) {
-        cashAccount = (await ChartOfAccounts.create([{
-          code: '1010', name: 'Bank Account', type: 'Asset', subtype: 'Current Asset', normalBalance: 'debit',
-        }], { session }))[0];
-      }
+      // Accounts were resolved and committed before the transaction started
+      // (see above) — the ledger's own transactions need to see them.
 
       if (!expenseAccount) {
         throw new Error('Expense account not found');
@@ -339,6 +348,71 @@ class TDSService {
     
     logger.info(`TDS challan recorded: ${tdsEntry.entryNumber}`);
     
+    return tdsEntry;
+  }
+
+  /**
+   * Record an actual government filing for a TDS entry (filing happens on the
+   * TRACES portal; this stores the acknowledgement as evidence).
+   */
+  async recordTDSFiling(tdsId, filingData, userId) {
+    const tdsEntry = await TDSEntry.findById(tdsId);
+
+    if (!tdsEntry) {
+      throw new Error('TDS entry not found');
+    }
+
+    if (tdsEntry.status === 'filed') {
+      throw new Error('Filing is already recorded for this entry');
+    }
+
+    if (tdsEntry.status !== 'deposited') {
+      throw new Error('Challan must be deposited before recording filing');
+    }
+
+    tdsEntry.status = 'filed';
+    tdsEntry.filedDate = filingData.filedDate ? new Date(filingData.filedDate) : new Date();
+    tdsEntry.filingForm = filingData.filingForm || '26Q';
+    if (filingData.acknowledgementNumber) {
+      tdsEntry.acknowledgementNumber = String(filingData.acknowledgementNumber).trim();
+    }
+    if (filingData.notes) tdsEntry.filingNotes = String(filingData.notes);
+
+    await tdsEntry.save();
+
+    await auditService.recordEvent({
+      eventType: 'TDS_FILING_RECORDED',
+      entityType: 'TDSEntry',
+      entityId: tdsEntry._id,
+      traceId: tdsEntry.trace_id || randomUUID(),
+      userId,
+      details: {
+        entryNumber: tdsEntry.entryNumber,
+        filingForm: tdsEntry.filingForm,
+        acknowledgementNumber: tdsEntry.acknowledgementNumber || null,
+        filedDate: tdsEntry.filedDate,
+        status: tdsEntry.status,
+      },
+    });
+
+    await evidenceAutomationService.captureAPIResponse({
+      operation: 'recordTDSFiling',
+      entityType: 'TDSEntry',
+      entityId: tdsEntry._id,
+      request: { tdsId, filingData, userId },
+      response: { success: true, entryNumber: tdsEntry.entryNumber, status: tdsEntry.status, acknowledgementNumber: tdsEntry.acknowledgementNumber || null },
+      traceId: tdsEntry.trace_id || randomUUID(),
+    });
+
+    notificationEvent.filingStatusUpdated({
+      regime: 'TDS',
+      reference: `${tdsEntry.entryNumber} (${tdsEntry.filingForm})`,
+      status: 'filed',
+      acknowledgementNumber: tdsEntry.acknowledgementNumber || null,
+      period: `${tdsEntry.quarter || ''} ${tdsEntry.financialYear || ''}`.trim(),
+    }).catch(() => {});
+
+    logger.info(`TDS filing recorded: ${tdsEntry.entryNumber}`);
     return tdsEntry;
   }
   

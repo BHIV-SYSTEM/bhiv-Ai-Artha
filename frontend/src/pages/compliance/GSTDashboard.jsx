@@ -32,6 +32,7 @@ import {
   Badge,
   Select,
   Table,
+  Input,
   Loading,
   Modal,
 } from '../../components/common';
@@ -51,6 +52,10 @@ const GSTDashboard = () => {
   const [preparing, setPreparing] = useState(false);
   const [preparedId, setPreparedId] = useState(null);
   const [arn, setArn] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [gstinInput, setGstinInput] = useState('');
+  const [gstinResult, setGstinResult] = useState(null);
+  const [validatingGstin, setValidatingGstin] = useState(false);
 
   useEffect(() => {
     fetchGSTData();
@@ -122,6 +127,56 @@ const GSTDashboard = () => {
   };
 
   const handleExportGSTR1 = () => exportFilingPacket('gstr-1');
+
+  // Generate the return data for the selected period and download it as JSON
+  // (the payload the portal filing is built from).
+  const handleGenerateReturn = async (type) => {
+    const periodParam = getPeriodParam();
+    const [year, month] = periodParam.split('-').map(Number);
+    const label = type === 'gstr-3b' ? 'GSTR-3B' : 'GSTR-1';
+    setGenerating(true);
+    try {
+      const endpoint = type === 'gstr-3b' ? '/gst/gstr3b/generate' : '/gst/gstr1/generate';
+      const response = await api.post(endpoint, { month, year });
+      const payload = response.data.data;
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: 'application/json;charset=utf-8;',
+      });
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `${type}-${periodParam}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+      toast.success(`${label} generated for ${periodParam} (JSON downloaded)`);
+      fetchGSTData();
+    } catch (error) {
+      console.error('Generate return error:', error);
+      toast.error(error.response?.data?.message || `Failed to generate ${label}`);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleValidateGSTIN = async () => {
+    const gstin = gstinInput.trim().toUpperCase();
+    if (!gstin) {
+      toast.error('Enter a GSTIN to validate');
+      return;
+    }
+    setValidatingGstin(true);
+    try {
+      const response = await api.post('/gst/validate-gstin', { gstin });
+      setGstinResult(response.data.data?.isValid === true);
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to validate GSTIN');
+      setGstinResult(null);
+    } finally {
+      setValidatingGstin(false);
+    }
+  };
 
   // Hand off to the government portal: download our packet, open gst.gov.in
   const handleFileOnPortal = async () => {
@@ -235,7 +290,7 @@ const GSTDashboard = () => {
         title="GST Dashboard"
         description="Monitor GST compliance, returns, and tax liability"
         action={
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <Select
               options={periodOptions}
               value={period}
@@ -246,13 +301,57 @@ const GSTDashboard = () => {
               GST Portal
             </Button>
             {can(['admin', 'accountant']) && (
-              <Button variant="secondary" icon={Download} onClick={handleExportGSTR1}>
-                Download GSTR-1
-              </Button>
+              <>
+                <Button
+                  variant="secondary"
+                  icon={Download}
+                  loading={generating}
+                  onClick={() => handleGenerateReturn('gstr-1')}
+                >
+                  Generate GSTR-1
+                </Button>
+                <Button
+                  variant="secondary"
+                  icon={Download}
+                  loading={generating}
+                  onClick={() => handleGenerateReturn('gstr-3b')}
+                >
+                  Generate GSTR-3B
+                </Button>
+                <Button variant="ghost" icon={Download} onClick={handleExportGSTR1}>
+                  GSTR-1 CSV
+                </Button>
+              </>
             )}
           </div>
         }
       />
+
+      {/* GSTIN Validator */}
+      <Card className="p-4">
+        <div className="flex items-center gap-3 flex-wrap">
+          <Badge variant="info">GSTIN Check</Badge>
+          <Input
+            placeholder="e.g., 27AABCT1234A1Z1"
+            value={gstinInput}
+            onChange={(e) => setGstinInput(e.target.value.toUpperCase())}
+            maxLength={15}
+            className="w-56"
+          />
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={validatingGstin}
+            onClick={handleValidateGSTIN}
+          >
+            Validate
+          </Button>
+          {gstinResult === true && <Badge variant="success">Valid GSTIN format</Badge>}
+          {gstinResult === false && <Badge variant="danger">Invalid GSTIN format</Badge>}
+          <span className="text-xs text-muted-foreground">
+            Format check only - verify registration on the GST portal for authoritative status.</span>
+        </div>
+      </Card>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">

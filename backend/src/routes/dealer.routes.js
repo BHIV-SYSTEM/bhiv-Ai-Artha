@@ -7,6 +7,7 @@ import {
   deleteDealer,
   getDealerSummary,
   syncFromTally,
+  syncSetu,
   syncOutstanding,
   getDealerStats,
   getRegions,
@@ -24,6 +25,7 @@ router.get('/stats', getDealerStats);
 router.get('/regions', getRegions);
 router.get('/cities', getCities);
 router.post('/sync-tally', authorize('admin'), syncFromTally);
+router.post('/sync-setu', authorize('admin'), syncSetu);
 router.post('/sync-outstanding', authorize('admin'), syncOutstanding);
 router.post('/locations/bulk', authorize('admin', 'accountant'), bulkUpdateLocations);
 router.get('/', getDealers);

@@ -54,6 +54,14 @@ const TDSManagement = () => {
   const [challanDate, setChallanDate] = useState(new Date().toISOString().split('T')[0]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [showChallanModal, setShowChallanModal] = useState(false);
+  const [challanEntry, setChallanEntry] = useState(null);
+  const [showFilingModal, setShowFilingModal] = useState(false);
+  const [submittingFiling, setSubmittingFiling] = useState(false);
+  const [filingForm, setFilingForm] = useState('26Q');
+  const [ackNumber, setAckNumber] = useState('');
+  const [filedDate, setFiledDate] = useState(new Date().toISOString().split('T')[0]);
+  const [filingNotes, setFilingNotes] = useState('');
   const [createForm, setCreateForm] = useState({
     deducteeName: '',
     deducteePan: '',
@@ -146,6 +154,65 @@ const TDSManagement = () => {
   const TRACES_PORTAL_URL =
     import.meta.env.VITE_TRACES_PORTAL_URL || 'https://www.traces.gov.in';
 
+  const handleExportForm24Q = async () => {
+    try {
+      const response = await api.get(
+        `/compliance/tds/form24q?quarter=${quarter}&financialYear=${year}&format=csv`,
+        { responseType: 'blob' }
+      );
+      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `Form24Q-${quarter}-${year}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+      toast.success('Form 24Q exported successfully');
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to export Form 24Q');
+    }
+  };
+
+  const openChallanModal = (entry) => {
+    setChallanEntry(entry);
+    setShowChallanModal(true);
+  };
+
+  const openFilingModal = (entry) => {
+    setSelectedEntry(entry);
+    setFilingForm('26Q');
+    setAckNumber('');
+    setFiledDate(new Date().toISOString().split('T')[0]);
+    setFilingNotes('');
+    setShowFilingModal(true);
+  };
+
+  const handleRecordFiling = async () => {
+    if (!selectedEntry) return;
+    if (!ackNumber.trim()) {
+      toast.error('Acknowledgement number (ARN) is required');
+      return;
+    }
+    setSubmittingFiling(true);
+    try {
+      await api.post(`/tds/entries/${selectedEntry._id}/file`, {
+        acknowledgementNumber: ackNumber.trim(),
+        filedDate,
+        filingForm,
+        notes: filingNotes.trim() || undefined,
+      });
+      toast.success('TDS filing recorded with acknowledgement');
+      setShowFilingModal(false);
+      fetchTDSData();
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to record filing');
+    } finally {
+      setSubmittingFiling(false);
+    }
+  };
+
   // Hand off to the government portal: export Form 26Q, then open TRACES
   const openTracesPortal = () => {
     window.open(TRACES_PORTAL_URL, '_blank', 'noopener,noreferrer');
@@ -173,12 +240,17 @@ const TDSManagement = () => {
 
   const statusOptions = [
     { value: 'pending', label: 'Pending' },
-    { value: 'paid', label: 'Paid' },
+    { value: 'deducted', label: 'Deducted' },
+    { value: 'deposited', label: 'Deposited' },
+    { value: 'filed', label: 'Filed' },
   ];
 
   const getStatusBadge = (status) => {
     const config = {
       pending: { variant: 'warning', label: 'Pending', icon: Clock },
+      deducted: { variant: 'info', label: 'Deducted', icon: Clock },
+      deposited: { variant: 'success', label: 'Deposited', icon: CheckCircle },
+      filed: { variant: 'primary', label: 'Filed', icon: CheckCircle },
       paid: { variant: 'success', label: 'Paid', icon: CheckCircle },
       overdue: { variant: 'danger', label: 'Overdue', icon: AlertTriangle },
     };
@@ -332,6 +404,9 @@ const TDSManagement = () => {
             )}
             <Button variant="secondary" icon={Download} onClick={handleExportForm26Q}>
               Download Form 26Q
+            </Button>
+            <Button variant="secondary" icon={Download} onClick={handleExportForm24Q}>
+              Download Form 24Q
             </Button>
             <Button variant="outline" icon={ExternalLink} onClick={handleFileOnPortal}>
               File on TRACES Portal
@@ -576,15 +651,31 @@ const TDSManagement = () => {
                   </Table.Cell>
                   <Table.Cell>{getStatusBadge(entry.status)}</Table.Cell>
                   <Table.Cell>
-                    {entry.status !== 'pending' ? (
-                      <Button variant="ghost" size="sm" icon={Eye}>
-                        Challan
-                      </Button>
-                    ) : can(['admin', 'accountant']) && (
-                      <Button size="sm" onClick={() => openPaymentModal(entry)}>
-                        Pay
-                      </Button>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {entry.status === 'pending' || entry.status === 'deducted' ? (
+                        can(['admin', 'accountant']) && (
+                          <Button size="sm" onClick={() => openPaymentModal(entry)}>
+                            Pay
+                          </Button>
+                        )
+                      ) : (
+                        can(['admin', 'accountant']) && entry.status === 'deposited' && (
+                          <Button size="sm" onClick={() => openFilingModal(entry)}>
+                            Record Filing
+                          </Button>
+                        )
+                      )}
+                      {entry.status !== 'pending' && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon={Eye}
+                          onClick={() => openChallanModal(entry)}
+                        >
+                          Challan
+                        </Button>
+                      )}
+                    </div>
                   </Table.Cell>
                 </Table.Row>
               ))}
@@ -743,6 +834,120 @@ const TDSManagement = () => {
             </Button>
             <Button onClick={handleCreateEntry} loading={creating}>
               Create Entry
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Challan Details Modal */}
+      <Modal
+        isOpen={showChallanModal}
+        onClose={() => setShowChallanModal(false)}
+        title="Challan Details"
+      >
+        {challanEntry && (
+          <div className="space-y-4">
+            <div className="p-4 bg-blue-50 rounded-lg">
+              <p className="text-sm text-blue-800">
+                TDS deposit details for <strong>{challanEntry.deductee}</strong> ({challanEntry.pan})
+              </p>
+            </div>
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Entry Number:</span>
+                <span className="font-mono font-medium">{challanEntry.entryNumber || '—'}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Section:</span>
+                <span className="font-medium">{challanEntry.section}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">TDS Amount:</span>
+                <span className="font-bold text-foreground">
+                  {formatCurrency(challanEntry.tdsAmount || 0)}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Challan Number:</span>
+                <span className="font-mono font-medium">
+                  {challanEntry.challanNo || 'No challan recorded'}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Deposit Date:</span>
+                <span className="font-medium">
+                  {challanEntry.paidDate ? formatDate(challanEntry.paidDate) : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Status:</span>
+                <span>{getStatusBadge(challanEntry.status)}</span>
+              </div>
+            </div>
+            <div className="flex justify-end pt-2">
+              <Button variant="secondary" onClick={() => setShowChallanModal(false)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Record Filing Modal */}
+      <Modal
+        isOpen={showFilingModal}
+        onClose={() => setShowFilingModal(false)}
+        title="Record TDS Filing"
+      >
+        <div className="space-y-4">
+          <div className="p-4 bg-green-50 rounded-lg">
+            <p className="text-sm text-green-800">
+              Record the return filed on TRACES for{' '}
+              <strong>{selectedEntry?.deductee}</strong> (TDS{' '}
+              {formatCurrency(selectedEntry?.tdsAmount || 0)})
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1">Form</label>
+            <Select
+              options={[
+                { value: '26Q', label: '26Q - Non-Salary' },
+                { value: '24Q', label: '24Q - Salary' },
+                { value: 'other', label: 'Other' },
+              ]}
+              value={filingForm}
+              onChange={(e) => setFilingForm(e.target.value)}
+            />
+          </div>
+
+          <Input
+            label="Acknowledgement Number (ARN)"
+            placeholder="e.g., ABC12345678901234567"
+            value={ackNumber}
+            onChange={(e) => setAckNumber(e.target.value)}
+          />
+
+          <Input
+            label="Filed Date"
+            type="date"
+            value={filedDate}
+            onChange={(e) => setFiledDate(e.target.value)}
+          />
+
+          <Input
+            label="Notes (optional)"
+            placeholder="e.g., Filed via TRACES quarterly return"
+            value={filingNotes}
+            onChange={(e) => setFilingNotes(e.target.value)}
+          />
+
+          <div className="flex justify-end gap-3 pt-4">
+            <Button variant="secondary" onClick={() => setShowFilingModal(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleRecordFiling} loading={submittingFiling}>
+              Record Filing
             </Button>
           </div>
         </div>

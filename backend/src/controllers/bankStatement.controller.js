@@ -51,13 +51,16 @@ export const uploadBankStatement = async (req, res) => {
 
     const { accountNumber, bankName, accountHolderName, startDate, endDate, openingBalance, closingBalance } = req.body;
 
+    // Pass raw values — the service normalises blanks and derives anything
+    // missing (dates/balances/holder) straight from the uploaded file.
+    // Casting here produced `Invalid Date` when an optional field was empty.
     const statement = await bankStatementService.uploadBankStatement(
       {
         accountNumber,
         bankName,
         accountHolderName,
-        startDate: new Date(startDate),
-        endDate: new Date(endDate),
+        startDate,
+        endDate,
         openingBalance,
         closingBalance,
       },

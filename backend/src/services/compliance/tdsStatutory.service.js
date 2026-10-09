@@ -1,17 +1,17 @@
 import Decimal from 'decimal.js';
-import CompanySettings from '../../models/CompanySettings.js';
 import TDSEntry from '../../models/TDSEntry.js';
 import TDSChallan from '../../models/TDSChallan.js';
 import ComplianceFiling from '../../models/ComplianceFiling.js';
 import { buildTraceId, parseQuarterPeriod } from './period.util.js';
 import traceabilityService from '../traceability.service.js';
+import companySettingsService from '../companySettings.service.js';
 
 const FORM26Q_SECTIONS = ['194A', '194C', '194H', '194I', '194J', '194Q', 'other'];
 
 class TDSStatutoryService {
   async generateForm26Q(quarter, financialYear, userId, existingTraceId = null) {
     const { startDate, endDate } = parseQuarterPeriod(quarter, financialYear);
-    const settings = await CompanySettings.findById('company_settings').lean();
+    const settings = await companySettingsService.getSettings();
     const traceId = existingTraceId || buildTraceId();
 
     const entries = await TDSEntry.find({
@@ -115,7 +115,7 @@ class TDSStatutoryService {
 
   async generateForm24Q(quarter, financialYear, userId, existingTraceId = null) {
     const { startDate, endDate } = parseQuarterPeriod(quarter, financialYear);
-    const settings = await CompanySettings.findById('company_settings').lean();
+    const settings = await companySettingsService.getSettings();
     const traceId = existingTraceId || buildTraceId();
 
     const entries = await TDSEntry.find({

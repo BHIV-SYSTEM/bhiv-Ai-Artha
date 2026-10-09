@@ -12,13 +12,23 @@ import {
   validateGSTDetailShape,
 } from './gstEngine.service.js';
 
-let traceabilityService = null;
-try {
-  const mod = await import('./traceability.service.js');
-  traceabilityService = mod.default;
-} catch {
-  logger.warn('traceability.service.js not available — trace stages will not be recorded');
-}
+// Traceability is loaded lazily: a top-level `await import(...)` is valid
+// native ESM but breaks CJS tooling (babel-jest could not even parse this
+// file, failing every test suite that imports the ledger), and
+// traceability.service.js imports this module back (cycle), so it must stay
+// out of the static import list.
+let traceabilityPromise = null;
+const loadTraceability = () => {
+  if (!traceabilityPromise) {
+    traceabilityPromise = import('./traceability.service.js')
+      .then((mod) => mod.default)
+      .catch(() => {
+        logger.warn('traceability.service.js not available — trace stages will not be recorded');
+        return null;
+      });
+  }
+  return traceabilityPromise;
+};
 
 const JOURNAL_STATUS = {
   DRAFT: 'DRAFT',
@@ -55,7 +65,9 @@ class LedgerService {
    * Record a trace stage if traceability service is available
    */
   async recordTraceStage(trace_id, stageData) {
-    if (!traceabilityService || !trace_id) return;
+    if (!trace_id) return;
+    const traceabilityService = await loadTraceability();
+    if (!traceabilityService) return;
     try {
       await traceabilityService.addStage(trace_id, stageData);
     } catch (err) {
@@ -374,9 +386,17 @@ class LedgerService {
         });
       }
     } else if (entry.gstDetails?.length) {
-      throw buildGSTValidationError('GST accounts are missing for GST details', {
-        entryId: String(entry._id),
-      });
+      // gstDetails are attached even for 0% / exempt supplies (they carry the
+      // taxable value for GSTR-1). Only demand GST accounts when an actual
+      // tax amount was charged — otherwise every exempt invoice fails post.
+      const taxCharged = entry.gstDetails.some((d) =>
+        new Decimal(d.cgst || 0).plus(d.sgst || 0).plus(d.igst || 0).greaterThan(0)
+      );
+      if (taxCharged) {
+        throw buildGSTValidationError('GST accounts are missing for GST details', {
+          entryId: String(entry._id),
+        });
+      }
     }
 
     if (hasTDS) {

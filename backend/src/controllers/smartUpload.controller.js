@@ -17,7 +17,9 @@ export const smartUpload = async (req, res) => {
 
     const metadata = {
       documentType: req.body.documentType,
+      password: req.body.password,
       vendor: req.body.vendor,
+      customerName: req.body.customerName,
       description: req.body.description,
       category: req.body.category,
       amount: req.body.amount,
@@ -36,8 +38,7 @@ export const smartUpload = async (req, res) => {
     const result = await smartUploadService.processUpload(
       req.file,
       req.user._id,
-      metadata,
-      req.body.password
+      metadata
     );
 
     res.status(201).json({
