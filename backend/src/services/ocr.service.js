@@ -1,3 +1,4 @@
+import '../utils/pdfPolyfills.js'; // must precede any pdfjs/pdf-parse import
 import logger from '../config/logger.js';
 import invoiceParser from './invoiceParser.service.js';
 import fs from 'fs';

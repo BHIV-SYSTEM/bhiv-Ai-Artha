@@ -1,3 +1,4 @@
+import '../utils/pdfPolyfills.js'; // must precede any pdfjs/pdf-parse import
 import fsPromises from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
