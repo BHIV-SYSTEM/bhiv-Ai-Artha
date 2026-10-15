@@ -1,5 +1,7 @@
 import ocrService from './ocr.service.js';
 import documentExtractor from './documentExtractor.service.js';
+import receivablesService from './receivables.service.js';
+import { looksLikeReceivablesReport } from './receivablesParser.js';
 import bankStatementService from './bankStatement.service.js';
 import expenseService from './expense.service.js';
 import invoiceService from './invoice.service.js';
@@ -32,6 +34,8 @@ class SmartUploadService {
     if (name.includes('invoice') || name.includes('inv-') || name.includes('inv_')) return 'bill';
     if (name.includes('bill') || name.includes('receipt') || name.includes('expense')) return 'receipt';
     if (mime.startsWith('image/')) return 'receipt';
+    // Receivables/outstanding statements: filename is a strong hint.
+    if (/receivable|outstanding|ageing|aging/.test(name)) return 'auto_detect_pdf';
     if (mime === 'application/pdf') return 'auto_detect_pdf';
     // Generic documents: extract content only, never create an expense.
     if (DOC_EXTENSIONS.has(ext)) return 'document';
@@ -46,6 +50,10 @@ class SmartUploadService {
 
       if (text.length < 10) return 'bill';
 
+      // Outstanding-due / receivables statements before generic scoring —
+      // they carry neither bank-statement nor bill structure.
+      if (looksLikeReceivablesReport(text)) return 'receivables';
+
       const keywords = [
         'account statement', 'bank statement', 'transaction history',
         'opening balance', 'closing balance', 'passbook',
@@ -53,7 +61,24 @@ class SmartUploadService {
         'debit', 'credit', 'running balance',
       ];
       const score = keywords.reduce((s, kw) => s + (text.includes(kw) ? 1 : 0), 0);
-      return score >= 3 ? 'bank_statement' : 'bill';
+      if (score >= 3) return 'bank_statement';
+
+      // A FINANCIAL document only: require BOTH a document-type keyword
+      // (invoice / bill / receipt / ...) AND money structure (GST, HSN,
+      // amounts, quantities). Random PDFs — brochures, reports, decks —
+      // then stay 'document': their content is extracted and shown, but no
+      // junk expense is ever written to the ledger.
+      const docTypeKw = [
+        'tax invoice', 'proforma', 'invoice', 'bill', 'receipt',
+        'cash memo', 'credit note', 'debit note',
+      ];
+      const moneyKw = [
+        'gstin', 'gst no', 'hsn', 'taxable', 'cgst', 'sgst', 'igst',
+        'amount', 'total', 'qty', 'quantity', '₹', 'rs.',
+      ];
+      const hasDocType = docTypeKw.some((kw) => text.includes(kw));
+      const moneyHits = moneyKw.filter((kw) => text.includes(kw)).length;
+      return hasDocType && moneyHits >= 2 ? 'bill' : 'document';
     } catch (err) {
       logger.warn(`PDF type detection failed: ${err.message}`);
       return 'bill';
@@ -85,6 +110,8 @@ class SmartUploadService {
         return await this._processBankStatement(file, userId, metadata, result);
       case 'document':
         return await this._processDocument(file, userId, metadata, result);
+      case 'receivables':
+        return await this._processReceivables(file, userId, metadata, result);
       case 'invoice':
         return await this._processInvoice(file, userId, metadata, result);
       default:
@@ -160,6 +187,85 @@ class SmartUploadService {
       return result;
     } catch (err) {
       logger.error('Smart upload document error:', err);
+      result.actions.push({ type: 'error', message: `Processing failed: ${err.message}` });
+      result.summary = { status: 'failed', message: err.message };
+      return result;
+    }
+  }
+
+  /**
+   * Receivables / "list of outstanding due" statements — parse every
+   * customer, bill row and day count from the file's own layout, roll up
+   * aging buckets, and persist the report. Never invents values: whatever
+   * the document declares is what gets stored, with integrity checks.
+   */
+  async _processReceivables(file, userId, metadata, result) {
+    try {
+      const report = await receivablesService.ingestFile(file.path, {
+        fileName: file.originalname,
+        uploadedBy: userId,
+        source: 'smart-upload',
+      });
+
+      if (!report) {
+        const msg =
+          'No receivables table found in this file — could not detect date/amount/due columns.';
+        result.actions.push({ type: 'no_table_found', message: msg });
+        result.summary = { status: 'failed', message: msg };
+        return result;
+      }
+
+      const s = report.summary;
+      const integ = report.integrity;
+
+      result.documentType = 'receivables';
+      result.actions.push({
+        type: 'receivables_report_created',
+        message: `Parsed ${s.customerCount} customers & ${s.billCount} bills — total ₹${Number(s.totalAmount).toLocaleString('en-IN')}`,
+        id: report._id,
+        reportId: report.reportId,
+      });
+      result.actions.push({
+        type: 'integrity_check',
+        message:
+          `Integrity: ${integ.customersMatch == null ? 'n/a' : integ.customersMatch ? 'customers ✓' : 'customers ✗'} · ` +
+          `${integ.totalMatches == null ? 'n/a' : integ.totalMatches ? 'total ✓' : 'total ✗'} · ` +
+          `${integ.customerTotalMismatches} customer total mismatch(es)`,
+        integrity: {
+          customersMatch: integ.customersMatch,
+          totalMatches: integ.totalMatches,
+          mismatches: integ.customerTotalMismatches,
+        },
+      });
+
+      result.extractedContent =
+        `${report.title}${report.group ? ` — Group: ${report.group}` : ''}\n` +
+        `Customers: ${s.customerCount} · Bills: ${s.billCount} · Total: ₹${s.totalAmount}`;
+
+      result.summary = {
+        reportId: report.reportId,
+        status: 'created',
+        title: report.title,
+        group: report.group,
+        asOfDate: report.asOfDate,
+        customerCount: s.customerCount,
+        billCount: s.billCount,
+        totalAmount: s.totalAmount,
+        declared: report.declared,
+        aging: s.aging,
+        integrity: integ,
+        customers: report.customers.slice(0, 50).map((c) => ({
+          name: c.name,
+          total: c.computedTotal,
+          aging: c.aging,
+          billCount: c.bills.length,
+        })),
+        customersTruncated: report.customers.length > 50,
+        message: `Receivables report stored: ${s.customerCount} customers, ${s.billCount} bills, ₹${Number(s.totalAmount).toLocaleString('en-IN')} across aging buckets.`,
+      };
+      return result;
+    } catch (err) {
+      logger.error('Smart upload receivables error:', err);
       result.actions.push({ type: 'error', message: `Processing failed: ${err.message}` });
       result.summary = { status: 'failed', message: err.message };
       return result;
@@ -337,15 +443,47 @@ class SmartUploadService {
         return result;
       }
 
+      // No amount anywhere in the document → recording a ₹0 expense would
+      // corrupt the ledger. Return everything that WAS extracted instead so
+      // the user can review it and add the record manually.
+      const docTotal = Math.max(
+        parseFloat(ocrData?.totalAmount) || 0,
+        parseFloat(ocrData?.amount) || 0
+      );
+      if (!hasExplicitAmount && !(docTotal > 0)) {
+        result.extractedContent = rawText || null;
+        result.summary = {
+          status: 'needs_review',
+          vendor: ocrData?.vendor || null,
+          date: ocrData?.date || null,
+          message:
+            'Text extracted, but no amount was found in this document — nothing was recorded. Review the content below and add the record manually.',
+        };
+        return result;
+      }
+
       // A tax invoice we issued ourselves (supplier = our company) is a
       // sales invoice — record it under Invoices, not Expenses.
       if (await this._isSalesInvoice(ocrData, metadata)) {
         return await this._createInvoiceFromOcr(file, userId, metadata, result, ocrData, rawText);
       }
 
+      // Readable description: prefer "VENDOR — INV-123", else the document
+      // text collapsed to one line (rawText with newlines is unreadable in
+      // the expense list).
+      const collapsed = (ocrData?.description || '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .join(' ')
+        .substring(0, 200);
+      const autoDescription = ocrData?.invoiceNumber
+        ? `${ocrData?.vendor || 'Unknown Vendor'} — ${ocrData.invoiceNumber}`
+        : collapsed || metadata.description || `Auto-uploaded: ${file.originalname}`;
+
       const expenseData = {
         vendor: ocrData?.vendor || metadata.vendor || 'Unknown Vendor',
-        description: ocrData?.description?.substring(0, 200) || metadata.description || `Auto-uploaded: ${file.originalname}`,
+        description: autoDescription,
         category: metadata.category || 'other',
         date: ocrData?.date || metadata.date || new Date().toISOString().split('T')[0],
         amount: ocrData?.amount || metadata.amount || '0',

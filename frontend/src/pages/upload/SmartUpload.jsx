@@ -70,6 +70,7 @@ const TYPE_COLORS = {
   receipt: 'bg-emerald-500/10 text-emerald-600 border-emerald-200',
   document: 'bg-violet-500/10 text-violet-600 border-violet-200',
   invoice: 'bg-cyan-500/10 text-cyan-600 border-cyan-200',
+  receivables: 'bg-rose-500/10 text-rose-600 border-rose-200',
 };
 const TYPE_LABELS = {
   bank_statement: 'Bank Statement',
@@ -77,7 +78,17 @@ const TYPE_LABELS = {
   receipt: 'Receipt / Expense',
   document: 'Document',
   invoice: 'Sales Invoice',
+  receivables: 'Receivables Report',
 };
+
+// Aging buckets shown for receivables reports (labels mirror backend keys).
+const AGING_BUCKETS = [
+  { key: 'current', label: 'Current', color: '#10B981' },
+  { key: '1-30', label: '1-30 Days', color: '#3B82F6' },
+  { key: '31-60', label: '31-60 Days', color: '#F59E0B' },
+  { key: '61-90', label: '61-90 Days', color: '#F97316' },
+  { key: '90+', label: '90+ Days', color: '#EF4444' },
+];
 
 // Optional "process as" override — Auto keeps the backend's own detection.
 const DOC_TYPE_OPTIONS = [
@@ -85,6 +96,7 @@ const DOC_TYPE_OPTIONS = [
   { value: 'invoice', label: 'Sales invoice' },
   { value: 'receipt', label: 'Expense / receipt' },
   { value: 'bank_statement', label: 'Bank statement' },
+  { value: 'receivables', label: 'Receivables / outstanding report' },
   { value: 'document', label: 'Document only' },
 ];
 
@@ -232,6 +244,7 @@ const SmartUpload = ({ embedded = false } = {}) => {
     (r) => r.success && (r.data?.summary?.status === 'approved' || approvedIds.has(r.data?.summary?.expenseId))
   ).length;
   const statementsCount = results.filter((r) => r.success && r.data?.documentType === 'bank_statement').length;
+  const receivablesCount = results.filter((r) => r.success && r.data?.documentType === 'receivables').length;
   const expensesCount = results.filter(
     (r) => r.success && (r.data?.documentType === 'receipt' || r.data?.documentType === 'bill')
   ).length;
@@ -330,6 +343,7 @@ const SmartUpload = ({ embedded = false } = {}) => {
             { label: 'Invoices', value: invoicesCount, icon: FileText, color: 'text-cyan-500' },
             { label: 'Statements', value: statementsCount, icon: CreditCard, color: 'text-blue-500' },
             { label: 'Documents', value: documentsCount, icon: FileText, color: 'text-violet-500' },
+            { label: 'Receivables', value: receivablesCount, icon: Clock, color: 'text-rose-500' },
             { label: 'Approved', value: approvedCount, icon: ShieldCheck, color: 'text-emerald-500' },
             { label: 'Total Amount', value: `₹${totalAmount.toLocaleString('en-IN')}`, icon: IndianRupee, color: 'text-primary' },
           ].map((s) => (
@@ -396,6 +410,7 @@ const SmartUpload = ({ embedded = false } = {}) => {
             const isExp = d?.documentType === 'receipt' || d?.documentType === 'bill';
             const isInv = d?.documentType === 'invoice';
             const isDoc = d?.documentType === 'document';
+            const isRcv = d?.documentType === 'receivables';
             const eid = s.expenseId;
             const approved = s.status === 'approved' || approvedIds.has(eid);
             const approving = approvingIds.has(eid);
@@ -415,6 +430,7 @@ const SmartUpload = ({ embedded = false } = {}) => {
                       : isSt ? <CreditCard className="w-5 h-5 text-blue-500" />
                       : isDoc ? <FileText className="w-5 h-5 text-violet-500" />
                       : isInv ? <FileText className="w-5 h-5 text-cyan-500" />
+                      : isRcv ? <Clock className="w-5 h-5 text-rose-500" />
                       : <Receipt className="w-5 h-5 text-amber-500" />}
                   </div>
                   <div className="flex-1 min-w-0">
@@ -434,6 +450,7 @@ const SmartUpload = ({ embedded = false } = {}) => {
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {isExp && s.amount && <span className="text-base font-bold text-foreground">₹{parseFloat(s.amount).toLocaleString('en-IN')}</span>}
                     {isInv && s.amount && <span className="text-base font-bold text-foreground">₹{parseFloat(s.amount).toLocaleString('en-IN')}</span>}
+                    {isRcv && s.totalAmount != null && <span className="text-base font-bold text-foreground">₹{Number(s.totalAmount).toLocaleString('en-IN')}</span>}
                     {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
                   </div>
                 </div>
@@ -685,6 +702,93 @@ const SmartUpload = ({ embedded = false } = {}) => {
                         {s.statementId && (
                           <Button variant="outline" onClick={(e) => { e.stopPropagation(); navigate(`/statements/${s.statementId}`); }} className="gap-2">
                             <ArrowRight className="w-4 h-4" /> View Statement Details
+                          </Button>
+                        )}
+                      </>
+                    )}
+
+                    {/* — Receivables / outstanding report — */}
+                    {isRcv && (
+                      <>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                          <Field icon={Store} label="Customers" value={s.customerCount} highlight />
+                          <Field icon={Layers} label="Bills" value={s.billCount} />
+                          <Field icon={IndianRupee} label="Total Outstanding" value={`₹${Number(s.totalAmount || 0).toLocaleString('en-IN')}`} highlight />
+                          <Field icon={CalendarDays} label="As-of Date" value={s.asOfDate ? new Date(s.asOfDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'} />
+                          <Field icon={CheckCircle} label="Integrity" value={s.integrity ? `${s.integrity.totalMatches ? 'Total ✓' : 'Total ✗'} · ${s.integrity.customersMatch ? 'Customers ✓' : 'Customers ✗'} · ${s.integrity.customerTotalMismatches} mismatch` : '—'} valueClass={s.integrity?.totalMatches && s.integrity?.customersMatch ? 'text-success' : 'text-amber-500'} />
+                        </div>
+
+                        {/* Aging buckets */}
+                        {s.aging && (
+                          <div className="p-3 bg-muted/40 rounded-xl">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+                              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Aging Buckets (how long money is pending)</span>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                              {AGING_BUCKETS.map((b) => (
+                                <div key={b.key} className="p-2.5 bg-background rounded-lg border border-border text-center">
+                                  <div className="w-1 h-6 rounded mx-auto mb-1.5" style={{ backgroundColor: b.color }} />
+                                  <p className="text-[10px] text-muted-foreground">{b.label}</p>
+                                  <p className="text-sm font-bold text-foreground">₹{Number(s.aging[b.key] || 0).toLocaleString('en-IN')}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Per-customer rows with aging */}
+                        {s.customers?.length > 0 && (
+                          <div className="overflow-x-auto rounded-xl border border-border">
+                            <table className="w-full text-sm">
+                              <thead className="bg-muted border-b border-border">
+                                <tr>
+                                  <th className="text-left py-2 px-3 font-medium text-muted-foreground">Customer</th>
+                                  <th className="text-center py-2 px-3 font-medium text-muted-foreground">Bills</th>
+                                  <th className="text-right py-2 px-3 font-medium text-muted-foreground">Total</th>
+                                  {AGING_BUCKETS.map((b) => (
+                                    <th key={b.key} className="text-right py-2 px-3 font-medium" style={{ color: b.color }}>{b.label}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {s.customers.map((c, ci) => (
+                                  <tr key={ci} className="hover:bg-muted/50">
+                                    <td className="py-2 px-3 font-medium text-foreground max-w-[220px] truncate">{c.name}</td>
+                                    <td className="py-2 px-3 text-center text-muted-foreground">{c.billCount}</td>
+                                    <td className="py-2 px-3 text-right font-mono font-semibold text-foreground">₹{Number(c.total || 0).toLocaleString('en-IN')}</td>
+                                    {AGING_BUCKETS.map((b) => (
+                                      <td key={b.key} className="py-2 px-3 text-right font-mono text-xs" style={{ color: (c.aging?.[b.key] || 0) > 0 ? b.color : '#9CA3AF' }}>
+                                        {(c.aging?.[b.key] || 0) > 0 ? `₹${Number(c.aging[b.key]).toLocaleString('en-IN')}` : '—'}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            {s.customersTruncated && (
+                              <p className="text-xs text-muted-foreground text-center py-2 bg-muted/30">
+                                Showing first {s.customers.length} customers — open Aged Receivables for the full report
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">Processing Steps</p>
+                          {d?.actions?.map((a, ai) => (
+                            <div key={ai} className="flex items-start gap-2 text-xs bg-muted/30 rounded-lg p-2.5">
+                              {a.type === 'receivables_report_created' || a.type === 'integrity_check' ? <CheckCircle className="w-3.5 h-3.5 text-success mt-0.5 flex-shrink-0" />
+                                : a.type === 'no_table_found' || a.type === 'error' ? <AlertCircle className="w-3.5 h-3.5 text-amber-500 mt-0.5 flex-shrink-0" />
+                                : <Zap className="w-3.5 h-3.5 text-primary mt-0.5 flex-shrink-0" />}
+                              <span className="text-muted-foreground">{a.message}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {s.reportId && (
+                          <Button variant="outline" onClick={(e) => { e.stopPropagation(); navigate('/reports/aged-receivables'); }} className="gap-2">
+                            <ArrowRight className="w-4 h-4" /> Go to Aged Receivables
                           </Button>
                         )}
                       </>

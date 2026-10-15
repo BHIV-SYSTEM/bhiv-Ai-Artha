@@ -38,9 +38,15 @@ const AgedReceivables = () => {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
   const [filter, setFilter] = useState('all');
+  const [uploaded, setUploaded] = useState(null); // latest parsed receivables report
 
   useEffect(() => {
     fetchAgedReceivables();
+    // Uploaded receivables reports (parsed from statements) — non-blocking.
+    api
+      .get('/receivables/reports/latest')
+      .then((res) => setUploaded(res.data.data))
+      .catch(() => setUploaded(null));
   }, []);
 
   const fetchAgedReceivables = async () => {
@@ -260,6 +266,84 @@ const AgedReceivables = () => {
           </ResponsiveContainer>
         </div>
       </Card>
+
+      {/* ── Uploaded receivables report (parsed from statement) ── */}
+      {uploaded && (
+        <Card>
+          <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">
+                Uploaded Statement — {uploaded.summary?.customerCount ?? uploaded.customers?.length ?? 0} customers
+                {' · '}{uploaded.summary?.billCount ?? 0} bills
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {uploaded.fileName}
+                {uploaded.asOfDate && ` · as of ${formatDate(uploaded.asOfDate)}`}
+                {uploaded.group && ` · group ${uploaded.group}`}
+                {' · '}{uploaded.integrity?.totalMatches ? 'total reconciled ✓' : 'total mismatch ✗'}
+              </p>
+            </div>
+            <span className="text-base font-bold text-foreground">
+              {formatCurrency(uploaded.summary?.totalAmount || 0)}
+            </span>
+          </div>
+
+          {/* Bucket strip straight from the file */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-4">
+            {agingBuckets.map((b) => (
+              <div key={b.key} className="p-2.5 bg-muted rounded-lg text-center">
+                <div className="w-1 h-5 rounded mx-auto mb-1.5" style={{ backgroundColor: b.color }} />
+                <p className="text-[10px] text-muted-foreground">{b.label}</p>
+                <p className="text-sm font-bold text-foreground">
+                  {formatCurrency(uploaded.summary?.aging?.[b.key] || 0)}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {/* Customers with their own aging + overdue days */}
+          <div className="overflow-x-auto max-h-[480px] overflow-y-auto rounded-xl border border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted border-b border-border sticky top-0">
+                <tr>
+                  <th className="text-left py-2 px-3 font-medium text-muted-foreground">Customer</th>
+                  <th className="text-right py-2 px-3 font-medium text-muted-foreground">Total</th>
+                  {agingBuckets.map((b) => (
+                    <th key={b.key} className="text-right py-2 px-3 font-medium text-[10px]" style={{ color: b.color }}>{b.label}</th>
+                  ))}
+                  <th className="text-right py-2 px-3 font-medium text-muted-foreground">Oldest Due</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {(uploaded.customers || []).map((c, i) => {
+                  const maxDays = (c.bills || []).reduce((m, b) => Math.max(m, b.daysOverdue || 0), 0);
+                  const oldest = (c.bills || []).filter((b) => b.dueDate).sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
+                  return (
+                    <tr key={i} className="hover:bg-muted/50">
+                      <td className="py-2 px-3 font-medium text-foreground max-w-[240px] truncate">{c.name}</td>
+                      <td className="py-2 px-3 text-right font-mono font-semibold text-foreground">{formatCurrency(c.computedTotal || 0)}</td>
+                      {agingBuckets.map((b) => (
+                        <td key={b.key} className="py-2 px-3 text-right font-mono text-xs" style={{ color: (c.aging?.[b.key] || 0) > 0 ? b.color : '#9CA3AF' }}>
+                          {(c.aging?.[b.key] || 0) > 0 ? formatCurrency(c.aging[b.key]) : '—'}
+                        </td>
+                      ))}
+                      <td className="py-2 px-3 text-right">
+                        {maxDays > 0 ? (
+                          <Badge variant={maxDays > 90 ? 'danger' : maxDays > 60 ? 'warning' : 'info'} size="sm">{maxDays}d</Badge>
+                        ) : oldest?.dueDate ? (
+                          <span className="text-xs text-muted-foreground">{formatDate(oldest.dueDate)}</span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {/* Customer Filter */}
       <Card className="p-4">

@@ -286,22 +286,128 @@ class OCRService {
   /* ── Extraction helpers ────────────────────────────── */
 
   _extractVendor(text) {
+    // Explicit labels, anchored to a line start so ordinary prose like
+    // "...advertising company globally ..." can never match as a vendor.
     const patterns = [
-      /(?:from|vendor|merchant|seller|billed by|company|issued by|shop|store)[\s:]+([^\n,;]+)/i,
-      /(?:M\/s\.?|Messrs\.?)[\s:]+([^\n,;]+)/i,
+      /(?:^|\n)\s*(?:from|vendor|merchant|seller|supplier|billed\s+by|issued\s+by|company(?:\s+name)?|shop|store)\s*[:\-]\s*([^\n,;]+)/i,
+      /(?:^|\n)\s*(?:M\/s\.?|Messrs\.?)\s*[:\-]?\s*([^\n,;]+)/i,
     ];
     for (const p of patterns) {
       const m = text.match(p);
       if (m?.[1]) {
-        const v = m[1].trim();
-        if (v.length >= 2 && v.length <= 100 && !/^\d+$/.test(v)) return v;
+        const v = this._cleanVendorCandidate(m[1]);
+        if (v && v.length >= 3) return v;
       }
     }
-    const lines = text.trim().split('\n').map(l => l.trim()).filter(l => l.length >= 3);
-    for (const line of lines.slice(0, 5)) {
-      if (line.length >= 3 && line.length <= 80 && /[A-Za-z]/.test(line) && !/^\d/.test(line)) return line;
+
+    const lines = String(text).split(/\r?\n/).map((l) => l.replace(/\t/g, ' ').trim());
+
+    // Standard invoice layout: a header ("TAX INVOICE", sometimes split
+    // across two lines) followed by the issuing company's name — which may
+    // itself be split across several short lines
+    // ("PURANCHAND / AND / SONS / TRADING / LLP.").
+    const headerRe =
+      /^(?:tax\s+invoice|invoice|proforma\s+invoice|commercial\s+invoice|bill|receipt|cash\s+memo|cash\s+receipt|credit\s+note|debit\s+note)(?:\s*[:.\-]?\s*(?:no\b.*)?)$/i;
+    let nameStart = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (headerRe.test(lines[i])) {
+        nameStart = i + 1;
+        break;
+      }
+      const combined = `${lines[i]} ${lines[i + 1] || ''}`.trim();
+      if (lines[i + 1] && headerRe.test(combined)) {
+        nameStart = i + 2;
+        break;
+      }
+    }
+    if (nameStart >= 0) {
+      const name = this._collectNameLines(lines, nameStart);
+      if (name) return name;
+    }
+
+    // GSTIN-adjacent: the seller's name sits directly above the first
+    // "GSTIN/UIN:" / "GST No:" line in most Indian invoice layouts.
+    const gstRe =
+      /gstin\s*\/?\s*uin|gst\s*(?:no\.?|number)\s*[:.]|^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/i;
+    const gstIdx = lines.findIndex((l) => gstRe.test(l));
+    if (gstIdx > 0) {
+      for (let i = gstIdx - 1; i >= Math.max(0, gstIdx - 5); i--) {
+        const l = lines[i];
+        if (!l) continue;
+        if (this._isAddressLine(l) || this._isGenericLabel(l)) continue;
+        const v = this._cleanVendorCandidate(l);
+        if (v && v.length >= 4 && !headerRe.test(l)) return v;
+      }
+    }
+
+    // Last resort: first meaningful non-header, non-address line.
+    for (const l of lines.slice(0, 12)) {
+      if (!l || headerRe.test(l)) continue;
+      if (!this._isNameLine(l)) continue;
+      const v = this._cleanVendorCandidate(l);
+      if (v && v.length >= 3) return v;
     }
     return 'Unknown Vendor';
+  }
+
+  /** Join consecutive short name lines that follow a document header. */
+  _collectNameLines(lines, start) {
+    const parts = [];
+    for (let i = start; i < Math.min(lines.length, start + 12); i++) {
+      const l = lines[i];
+      if (!l) {
+        if (parts.length) break;
+        continue;
+      }
+      if (this._isGenericLabel(l) || this._isAddressLine(l) || !this._isNameLine(l)) break;
+      parts.push(l);
+      if (parts.join(' ').length > 80) break;
+    }
+    const joined = this._cleanVendorCandidate(parts.join(' '));
+    if (!joined || joined.length < 4) return null;
+    if (/^(?:tax\s+invoice|invoice|bill|receipt)$/i.test(joined)) return null;
+    return joined;
+  }
+
+  _isAddressLine(l) {
+    return (
+      /^\d/.test(l) ||
+      /\d{5}/.test(l) ||
+      /@|www\.|https?:\/\//i.test(l) ||
+      (String(l).match(/\d/g) || []).length >= 4 ||
+      /\b(?:ph|phone|tel|mobile|mob|email|e-mail|address|street|road|lane|floor|building|nagar|colony|pin\s*code|state\s*code|place\s+of\s+supply)\b/i.test(
+        l
+      )
+    );
+  }
+
+  _isGenericLabel(l) {
+    const s = String(l).trim().replace(/[:.\-]+$/, '');
+    return /^(?:tax\s+invoice|invoice|proforma|bill|receipt|cash\s+memo|credit\s+note|debit\s+note|gstin(?:\s*\/\s*uin)?|gst(?:\s*(?:no|number))?|uin|state\s*(?:name|code)|state|e-?mail|phone|ph|mobile|mob|pan|cin|place\s+of\s+supply|consignee|consigntee|buyer|seller|ship\s+to|bill\s+to|details|taxable\s+value|hsn(?:\s*\/\s*sac)?|serial\s*(?:no|number)|description|quantity|qty|rate|amount|total(?:\s+amount)?|sub-?total|grand\s+total|round\s+off|invoice\s*(?:no|number)|bill\s*(?:no|number)|date|dated|reference(?:\s+no)?|terms|in\s+words|amount\s+in\s+words)$/i.test(
+      s
+    );
+  }
+
+  _isNameLine(l) {
+    return (
+      l.length >= 3 &&
+      l.length <= 60 &&
+      /[A-Za-z]{3}/.test(l) &&
+      !/^\d/.test(l) &&
+      !this._isAddressLine(l) &&
+      !this._isGenericLabel(l)
+    );
+  }
+
+  _cleanVendorCandidate(v) {
+    const s = String(v)
+      .replace(/\s+/g, ' ')
+      .replace(/[\s,;:.\-–—]+$/, '')
+      .trim();
+    if (s.length < 2 || s.length > 100) return null;
+    if (!/[A-Za-z]/.test(s)) return null;
+    if (/^\d+$/.test(s)) return null;
+    return s;
   }
 
   /** Buyer/customer block — "Bill To", "Consignee (Ship to)", "Sold To", ... */
@@ -325,17 +431,25 @@ class OCRService {
   }
 
   _extractDate(text) {
+    const s = String(text);
+    const MON = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)';
     const patterns = [
       /(?:date|invoice date|bill date|dated|dt)[\s.:]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})/i,
       /(?:date|invoice date|bill date|dated|dt)[\s.:]*(\d{4}[/-]\d{1,2}[/-]\d{1,2})/i,
-      /(?:date|invoice date|bill date|dated|dt)[\s.:]*(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s,]*\d{2,4})/i,
+      // "dt. 11-Aug-26", "Dated: 30-Apr-2026", "12 March, 2026"
+      new RegExp(
+        `(?:date|invoice date|bill date|dated|dt)[\\s.:]*(\\d{1,2}[\\s\\-/.]${MON}[a-z]*[\\s\\-/,./]+\\d{2,4})`,
+        'i'
+      ),
       /(\d{4}[/-]\d{1,2}[/-]\d{1,2})/,
       /(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})/,
-      /(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s,]*\d{2,4})/i,
+      new RegExp(`(\\d{1,2}[\\s\\-/.]${MON}[a-z]*[\\s\\-/,./]+\\d{2,4})`, 'i'),
     ];
     for (const p of patterns) {
-      const m = text.match(p);
-      if (m?.[1]) {
+      // Try EVERY match, not just the first: the first bare date-like string
+      // in a document is often junk ("97/98/99" is a phone-number fragment).
+      const re = new RegExp(p.source, p.flags.includes('g') ? p.flags : `${p.flags}g`);
+      for (const m of s.matchAll(re)) {
         const d = this._toDate(m[1]);
         if (d) return d;
       }
@@ -387,7 +501,7 @@ class OCRService {
       return valid(year, month, day);
     }
 
-    m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{2,4})$/);
+    m = s.match(/^(\d{1,2})[\s\-/.]+([A-Za-z]{3,})[\s\-/,./]+(\d{2,4})$/);
     if (m) {
       const months = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
       const month = months[m[2].toLowerCase().slice(0, 3)];

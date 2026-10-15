@@ -922,6 +922,12 @@ class InvoiceService {
   }
 
   async _requesterGstins() {
+    // Privacy: GSTIN-based cross-company "shared invoice" matching is opt-in
+    // and OFF by default. Without it, an invoice from another company only
+    // appears here when it was explicitly addressed to the requester's own
+    // email — accounts never see other companies' data by GSTIN alone.
+    const flag = String(process.env.ARTHA_SHARED_INVOICE_GSTIN_MATCH || '').toLowerCase();
+    if (!['1', 'on', 'true', 'yes'].includes(flag)) return [];
     try {
       const settings = await companySettingsService.getSettings();
       return [settings?.gstin, ...((settings?.gstinRegistrations || []).map((r) => r?.gstin))]
