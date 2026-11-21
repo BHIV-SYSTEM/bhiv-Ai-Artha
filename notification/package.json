@@ -1,0 +1,40 @@
+{
+  "name": "@artha/notification-gateway",
+  "version": "1.0.0",
+  "description": "Standalone multi-tenant push notification gateway — Web Push (VAPID), FCM (Android/iOS), APNs (iOS). Registers devices against user_id + tenant_id and delivers critical alerts, SLA notices and task assignments.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./sw": "./client/sw.js",
+    "./usePushNotifications": "./client/usePushNotifications.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "gen-vapid": "web-push generate-vapid-keys"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "keywords": [
+    "push",
+    "notifications",
+    "web-push",
+    "fcm",
+    "apns",
+    "multi-tenant",
+    "sla"
+  ],
+  "license": "UNLICENSED",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "google-auth-library": "^9.14.0",
+    "mongoose": "^8.9.1",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^11.3.0"
+  }
+}
