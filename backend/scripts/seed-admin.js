@@ -10,7 +10,6 @@
  */
 
 import mongoose from 'mongoose';
-import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -55,15 +54,13 @@ async function seedAdmin() {
       return;
     }
 
-    // Hash password
-    const salt = await bcrypt.genSalt(12);
-    const hashedPassword = await bcrypt.hash(ADMIN_USER.password, salt);
-
-    // Create admin user
+    // Create admin user — pass the PLAINTEXT password; the User model's
+    // pre('save') hook hashes it exactly once. (Pre-hashing here would make
+    // the model hash an already-hashed string, so login could never match.)
     const admin = await User.create({
       name: ADMIN_USER.name,
       email: ADMIN_USER.email,
-      password: hashedPassword,
+      password: ADMIN_USER.password,
       role: ADMIN_USER.role,
       roles: ADMIN_USER.roles,
       allowedApps: ADMIN_USER.allowedApps,
