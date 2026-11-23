@@ -8,7 +8,7 @@
 [![Governance](https://img.shields.io/badge/Governance-Enforced-blue.svg)]()
 [![BHIV](https://img.shields.io/badge/BHIV-Ecosystem-Integrated-green.svg)]()
 
-**ARTHA** is a comprehensive, India-compliant accounting and financial management system built on modern web technologies with full double-entry bookkeeping integrity. It operates as a governed runtime participant within the BHIV ecosystem with deterministic execution, replayability, observability, and authority enforcement.
+**ARTHA** is a comprehensive, India-compliant accounting and financial management system built on modern web technologies with full double-entry bookkeeping integrity. It operates as a governed runtime participant within the BHIV ecosystem with deterministic execution, replayability, observability, and authority enforcement
 
 ## 🎯 Key Features
 
